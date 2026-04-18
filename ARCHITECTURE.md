@@ -16,8 +16,10 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 
 ## 3. Data Strategy & Preprocessing
 ### Feature Selection
-*   **Dynamic Pruning:** Automatic removal of low-variance features via a **Variance Threshold (1e-5)**. 
-*   **FD001 Specifics:** Typically drops 10 features (Op_Settings 1-3, Sensors 1, 5, 6, 10, 16, 18, 19).
+*   **Variance Pruning:** Automatic removal of constant features via a **Variance Threshold (1e-5)**.
+*   **Monotonicity Selection:** Calculates **Absolute Spearman Correlation** per engine and averages across the fleet. Prunes the bottom 5 least monotonic sensors or those with correlation < 0.2.
+*   **FD001 Specifics:** Typically drops ~15 features (Op_Settings 1-3, Sensors 1, 5, 6, 10, 16, 18, 19 + lowest monotonic).
+
 ### Temporal Transformation
 *   **Sliding Window:** 2D telemetry is reshaped into 3D tensors `(batch, channels, window_size)` for 1D-CNN temporal feature extraction.
 *   **Target Labeling:** Piecewise Linear RUL capped at **125 cycles** to reduce early-life noise.
@@ -61,8 +63,26 @@ Where $d_{i} = \hat{y}_{i} - y_{i}$:
 $$S = \sum_{i=1}^{n} \left( e^{-\frac{d_i}{13}} - 1 \right) \text{ for } d_i < 0$$
 $$S = \sum_{i=1}^{n} \left( e^{\frac{d_i}{10}} - 1 \right) \text{ for } d_i \ge 0$$
 
-## 6. Ensuring Reproducibility
-* **Seed Control**: Use 'seed' parameter in every Python scripts to ensure consistent random splitting and initialization (seed=42).
-* **Config-Driven**: All system parameters (Kafka topics, window sizes, thresholds) are defined in `CONFIG.md` and `config.py`.
-* **Schema Versioning**: All feature schemas are exported to `feature_schema.json` and `sensor_schema.json` to ensure consistent feature selection across pipeline stages.
-* **Model Versioning**: All model versions are stored in `models/` directory with timestamped filenames.
+## 6. Ensuring Reproducibility & Maintainability
+* **Global Seed Control**: Centralized `set_seed(42)` in `src/core/config.py` governing Python, NumPy, PyTorch, and CuDNN.
+* **Deterministic DataLoaders**: Multi-threaded loaders use `seed_worker` and `torch.Generator` for absolute data shuffling consistency.
+* **Schema Versioning**: Feature selection results are exported to `feature_schema.json` to synchronize the Spark Streaming pipeline with the trained model's input requirements.
+* **Model Versioning**: All models are stored in `models/` with timestamped filenames (`YYYYMMDD_HHMMSS_rul_model.onnx`).
+* **Evaluation Versioning**: Every evaluation run generates a versioned package in `results/{timestamp}/` containing the performance plot (`.png`) and academic report (`.md`).
+
+## 7. Project Directory Structure
+```text
+cmapss-lambda/
+├── src/                       # Modular source package
+│   ├── core/                  # Global config and reproducibility
+│   ├── data/                  # Preprocessing and DataLoaders
+│   ├── models/                # Architecture definitions
+│   ├── training/              # Tuning and training pipelines
+│   └── evaluation/            # Benchmarking and reporting
+├── models/                    # Persistent storage for ONNX models
+├── results/                   # Timestamped evaluation reports
+├── data/                      # Raw C-MAPSS dataset
+├── preprocess.py              # Entry: Data Pipeline
+├── tune.py                    # Entry: Training Pipeline
+└── evaluate.py                # Entry: Evaluation Pipeline
+```
