@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `docker-compose config`
-*   **Last Completed Task:** Created robust `docker-compose.yml` and `hadoop.env` for Lambda Architecture.
-*   **Current Active Task:** Finalizing infrastructure setup.
+*   **Last Shell Command:** `conda run -n pytorch-gpu python preprocess_cmapss.py`
+*   **Last Completed Task:** Implemented PyTorch `CMAPSSTrainDataset`, `CMAPSSTestDataset`, and `get_dataloaders` wrapper in `data_loaders.py`.
+*   **Current Active Task:** Verifying DataLoader logic and pre-padding functionality.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** User to run `docker-compose up -d` to start the cluster.
+*   **Next Planned Step:** Implement the PyTorch model architecture (LSTM/1D-CNN) and training loop.
