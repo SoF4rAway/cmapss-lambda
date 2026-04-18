@@ -60,3 +60,9 @@ The system is evaluated against the NASA C-MAPSS FD001 dataset:
 Where $d_{i} = \hat{y}_{i} - y_{i}$:
 $$S = \sum_{i=1}^{n} \left( e^{-\frac{d_i}{13}} - 1 \right) \text{ for } d_i < 0$$
 $$S = \sum_{i=1}^{n} \left( e^{\frac{d_i}{10}} - 1 \right) \text{ for } d_i \ge 0$$
+
+## 6. Ensuring Reproducibility
+* **Seed Control**: Use 'seed' parameter in every Python scripts to ensure consistent random splitting and initialization (seed=42).
+* **Config-Driven**: All system parameters (Kafka topics, window sizes, thresholds) are defined in `CONFIG.md` and `config.py`.
+* **Schema Versioning**: All feature schemas are exported to `feature_schema.json` and `sensor_schema.json` to ensure consistent feature selection across pipeline stages.
+* **Model Versioning**: All model versions are stored in `models/` directory with timestamped filenames.

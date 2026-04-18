@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `conda run -n pytorch-gpu python tune_model.py`
-*   **Last Completed Task:** Implemented LR Decay and Early Stopping in the final retraining loop.
-*   **Current Active Task:** Finalized all training pipeline enhancements.
+*   **Last Shell Command:** `conda run -n pytorch-gpu python evaluate.py`
+*   **Last Completed Task:** Restructured project into modular `src/` package and implemented versioned evaluation results in `results/`.
+*   **Current Active Task:** Finalized maintenance-friendly architecture.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Execute full 100-trial tuning run and generate final evaluation report.
+*   **Next Planned Step:** Integrate the versioned results and `feature_schema.json` with the downstream Spark Streaming logic.
