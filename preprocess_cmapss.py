@@ -114,7 +114,7 @@ class CMAPSSPreprocessor:
         logger.info(f"Split data into {len(train_ids)} training and {len(val_ids)} validation engines.")
         return train_df, val_df
 
-    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+    def fit_transform(self, df: pd.DataFrame, threshold: float = 1e-5) -> pd.DataFrame:
         """
         Identifies constant sensors, fits scaler on training data, and transforms.
 
@@ -129,7 +129,7 @@ class CMAPSSPreprocessor:
         
         # Identify constant features (zero variance)
         variances = df[features].var()
-        self.constant_sensors = list(variances[variances == 0].index)
+        self.constant_sensors = list(variances[variances <= threshold].index)
         
         if self.constant_sensors:
             logger.info(f"Dropping constant sensors: {self.constant_sensors}")

@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `conda run -n pytorch-gpu python preprocess_cmapss.py`
-*   **Last Completed Task:** Implemented PyTorch `CMAPSSTrainDataset`, `CMAPSSTestDataset`, and `get_dataloaders` wrapper in `data_loaders.py`.
-*   **Current Active Task:** Verifying DataLoader logic and pre-padding functionality.
+*   **Last Shell Command:** `conda run -n pytorch-gpu python tune_model.py`
+*   **Last Completed Task:** Implemented `model.py` (1D-CNN) and `tune_model.py` (Optuna NAS) with ONNX export support.
+*   **Current Active Task:** Finalized model architecture and tuning pipeline.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Implement the PyTorch model architecture (LSTM/1D-CNN) and training loop.
+*   **Next Planned Step:** Integrate ONNX model into Spark Speed Layer (Streaming).

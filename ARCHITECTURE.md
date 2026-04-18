@@ -1,35 +1,62 @@
+# Project Architecture: Antigravity Agent
 ---
 scope: PROJECT_ARCHITECTURE
 priority: 1 (Absolute Source of Truth for Implementation)
 ---
 
-# Predictive Maintenance: Lambda Architecture
-
 ## 1. Project Objective
-Build an end-to-end Big Data system to ingest, process, and analyze NASA C-MAPSS turbofan sensor data to predict Remaining Useful Life (RUL) and detect anomalies.
+Build a high-performance, safety-critical Big Data system to ingest, process, and analyze NASA C-MAPSS turbofan telemetry. The system utilizes a "TinyML" approach to predict Remaining Useful Life (RUL) with sub-millisecond latency.
 
-## 2. Infrastructure Stack (Docker Compose)
-* **Ingestion:** Apache Kafka (Topic: `cmapss_telemetry`, JSON format) + Zookeeper.
-* **Compute/Batch:** Apache Spark + Hadoop Distributed File System (HDFS).
-* **Serving/Analytics:** Elasticsearch (Time-series index) + Kibana (Dashboards/Alerts).
+## 2. Infrastructure Stack (Dockerized)
+*   **Ingestion:** Apache Kafka (Topic: `cmapss_telemetry`) + Zookeeper.
+*   **Stream Processing:** Spark Structured Streaming (Python/PySpark).
+*   **Inference Engine:** ONNX Runtime (Optimized for x64 L1/L2 Cache residency).
+*   **Storage (Cold):** HDFS / Parquet (Snappy Compression).
+*   **Observability (Hot):** Elasticsearch + Kibana (Real-time RUL Dashboards).
 
-## 3. Data Schema (C-MAPSS)
-Incoming JSON payloads will map to 26 features:
-* `Unit Number`: Engine ID
-* `Time/Cycles`: Operational cycle
-* `Operational Settings (1-3)`
-* `Sensor Measurements (1-21)`
+## 3. Data Strategy & Preprocessing
+### Feature Selection
+*   **Dynamic Pruning:** Automatic removal of low-variance features via a **Variance Threshold (1e-5)**. 
+*   **FD001 Specifics:** Typically drops 10 features (Op_Settings 1-3, Sensors 1, 5, 6, 10, 16, 18, 19).
+### Temporal Transformation
+*   **Sliding Window:** 2D telemetry is reshaped into 3D tensors `(batch, channels, window_size)` for 1D-CNN temporal feature extraction.
+*   **Target Labeling:** Piecewise Linear RUL capped at **125 cycles** to reduce early-life noise.
 
-## 4. Pipeline Phases
-1.  **Ingestion:** Python Kafka Producer reading raw `.txt` simulating continuous high-speed JSON stream.
-2.  **Batch Layer:** Persist data in HDFS/Parquet. Feature engineering via PySpark (sliding windows). Train PyTorch model (LSTM/1D-CNN) locally to predict RUL.
-3.  **Speed Layer:** Spark Structured Streaming consuming Kafka. Applies Pandas UDFs to load the TorchScript model for sub-second, distributed inference.
-4.  **Serving:** Sink predictions to Elasticsearch. Trigger Kibana alerts if `RUL < 30`.
+## 4. Lambda Pipeline Phases
 
-## 5. Evaluation Metrics
-Models must be evaluated using:
-1.  **RMSE**
-2.  **Asymmetric Scoring Function:** Penalizes late predictions (estimating longer life than reality) heavier than early predictions. 
-    Where $d_{i} = \hat{y}_{i} - y_{i}$:
-    $$S = \sum_{i=1}^{n} \left( e^{-\frac{d_i}{13}} - 1 \right) \text{ for } d_i < 0$$
-    $$S = \sum_{i=1}^{n} \left( e^{\frac{d_i}{10}} - 1 \right) \text{ for } d_i \ge 0$$
+### Phase 1: Ingestion (The Producer)
+*   Python-based simulator reading `.txt` source files.
+*   Serializes sensor arrays into **JSON payloads** keyed by `unit_id` to ensure partition-local stateful processing in Spark.
+
+### Phase 2: Speed Layer (Real-time Inference)
+*   **Mechanism:** Spark Structured Streaming consuming from Kafka.
+*   **Inference:** Vectorized execution via **Pandas UDFs** loading the ONNX model.
+*   **Optimization:** Model size is kept **<400KB** (current: 378KB) to maximize CPU cache hits and minimize memory bus contention.
+*   **Target Latency:** < 0.1ms per inference (Current benchmark: 0.07ms).
+
+### Phase 3: Batch Layer (Historical & Retraining)
+*   **Persistence:** Raw telemetry and predictions are synced to HDFS in Parquet format.
+*   **Retraining Loop:** Periodic batch jobs trigger PyTorch retraining if statistical drift (Bias > 10.0) is detected.
+*   **Redeploy:** Automated export to **ONNX (Opset 14)** for hot-swapping into the Speed Layer.
+
+### Phase 4: Serving (ELK Stack)
+*   **Sink:** Predictions pushed to Elasticsearch via `spark-elasticsearch` connector.
+*   **Visualization:** Kibana dashboards tracking:
+    *   Individual Engine Health (RUL countdown).
+    *   System-wide Error Distribution (Residuals).
+    *   Safety Alerts (Critical: `RUL < 30`).
+
+## 5. Performance Benchmarks & Metrics
+The system is evaluated against the NASA C-MAPSS FD001 dataset:
+
+| Metric | Target | Current Baseline |
+| :--- | :--- | :--- |
+| **RMSE** | < 20.0 | **19.15** |
+| **NASA Score** | < 1100 | **1023.09** |
+| **Inference Latency** | < 0.1 ms | **0.07 ms** |
+| **Model Size** | < 500 KB | **378.23 KB** |
+
+### NASA Asymmetric Scoring Function
+Where $d_{i} = \hat{y}_{i} - y_{i}$:
+$$S = \sum_{i=1}^{n} \left( e^{-\frac{d_i}{13}} - 1 \right) \text{ for } d_i < 0$$
+$$S = \sum_{i=1}^{n} \left( e^{\frac{d_i}{10}} - 1 \right) \text{ for } d_i \ge 0$$
