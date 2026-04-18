@@ -31,7 +31,7 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 ### Phase 2: Speed Layer (Real-time Inference)
 *   **Mechanism:** Spark Structured Streaming consuming from Kafka.
 *   **Inference:** Vectorized execution via **Pandas UDFs** loading the ONNX model.
-*   **Optimization:** Model size is kept **<400KB** (current: 378KB) to maximize CPU cache hits and minimize memory bus contention.
+*   **Optimization:** Model size is kept **<1MB** (current: 378KB) to maximize CPU cache hits and minimize memory bus contention.
 *   **Target Latency:** < 0.1ms per inference (Current benchmark: 0.07ms).
 
 ### Phase 3: Batch Layer (Historical & Retraining)
