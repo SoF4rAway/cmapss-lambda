@@ -97,7 +97,10 @@ services:
       - hadoop_datanode:/hadoop/dfs/data
 
   spark-master:
-    image: bitnamilegacy/spark:3.5.0
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: custom-spark:3.5.0
     container_name: spark-master
     ports:
       - "8080:8080"
@@ -117,7 +120,10 @@ services:
           memory: 1.5G
 
   spark-worker:
-    image: bitnamilegacy/spark:3.5.0
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: custom-spark:3.5.0
     container_name: spark-worker
     depends_on:
       - spark-master
