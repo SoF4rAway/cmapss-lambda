@@ -1,0 +1,19 @@
+{
+    "dropped_features": [
+        "op_setting_3",
+        "op_setting_1",
+        "sensor_3",
+        "sensor_1",
+        "sensor_2",
+        "sensor_16",
+        "sensor_17",
+        "sensor_9",
+        "sensor_8",
+        "op_setting_2",
+        "sensor_19",
+        "sensor_5",
+        "sensor_10",
+        "sensor_6",
+        "sensor_18"
+    ]
+}
