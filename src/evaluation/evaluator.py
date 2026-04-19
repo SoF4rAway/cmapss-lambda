@@ -35,13 +35,23 @@ def benchmark_inference(onnx_path: str, input_shape: tuple, n_runs: int = 1000) 
     throughput = n_runs / (end_time - start_time)  # samples/sec
     return avg_latency, throughput
 
-def get_latest_model(models_dir=MODELS_DIR):
+def get_latest_model(models_dir: str = MODELS_DIR) -> Tuple[str, str]:
+    """
+    Scan versioned subdirectories (models/{timestamp}/) for model.onnx.
+    Returns the path to the latest model.onnx and its parent directory.
+    """
     if not os.path.exists(models_dir):
-        return None
-    models = sorted([f for f in os.listdir(models_dir) if f.endswith(".onnx")])
-    if not models:
-        return None
-    return os.path.join(models_dir, models[-1])
+        return None, None
+    # Versioned dirs are named as timestamps (YYYYMMDD_HHMMSS), sort lexicographically
+    version_dirs = sorted([
+        d for d in os.listdir(models_dir)
+        if os.path.isdir(os.path.join(models_dir, d))
+    ])
+    for version_dir in reversed(version_dirs):
+        candidate = os.path.join(models_dir, version_dir, "model.onnx")
+        if os.path.exists(candidate):
+            return candidate, os.path.join(models_dir, version_dir)
+    return None, None
 
 def run_evaluation_pipeline():
     # 1. Setup paths
@@ -50,14 +60,14 @@ def run_evaluation_pipeline():
     rul_path = os.path.join(CMAPSS_DATA_DIR, "RUL_FD001.txt")
     train_path = os.path.join(CMAPSS_DATA_DIR, "train_FD001.txt")
     
-    onnx_model_path = get_latest_model()
+    onnx_model_path, model_artifact_dir = get_latest_model()
     if not onnx_model_path or not os.path.exists(onnx_model_path):
-        logger.error("No ONNX models found.")
+        logger.error("No ONNX models found in versioned subdirectories of: {MODELS_DIR}")
         return
-    
-    # Extract timestamp for versioned results
+
+    # Timestamp is the versioned directory name (e.g. 20260419_215233)
+    timestamp = os.path.basename(model_artifact_dir)
     model_filename = os.path.basename(onnx_model_path)
-    timestamp = model_filename.split("_rul_model")[0] if "_rul_model" in model_filename else "latest"
     run_results_dir = os.path.join(RESULTS_DIR, timestamp)
     os.makedirs(run_results_dir, exist_ok=True)
     
@@ -72,7 +82,8 @@ def run_evaluation_pipeline():
     
     test_labeled = preprocessor.load_and_label_test_data(test_path, rul_path)
     test_scaled = preprocessor.transform(test_labeled)
-    test_ds = CMAPSSTestDataset(test_scaled, sequence_length=30)
+    feature_cols = preprocessor.active_features
+    test_ds = CMAPSSTestDataset(test_scaled, feature_cols=feature_cols, sequence_length=30)
     x_test = test_ds.features.numpy()
     y_true = test_ds.labels.numpy().flatten()
     
@@ -85,6 +96,8 @@ def run_evaluation_pipeline():
     rmse = np.sqrt(np.mean((y_pred - y_true)**2))
     nasa_score = nasa_asymmetric_score(y_pred, y_true)
     errors = y_pred - y_true
+    error_mean = np.mean(errors)
+    error_std = np.std(errors)
     
     input_shape = (1, 30, x_test.shape[2])
     avg_latency, throughput = benchmark_inference(onnx_model_path, input_shape)
@@ -102,12 +115,30 @@ def run_evaluation_pipeline():
     plt.savefig(plot_path, dpi=300)
     
     # 6. Report Generation
-    report = f"""# Academic Performance Report: {timestamp}
+    report = f"""
+================================================================================
+                Academic Performance Report: {timestamp}
+================================================================================
+Model Identity
+--------------------------------------------------------------------------------
 - Model: {model_filename}
+- Time: {timestamp}
+--------------------------------------------------------------------------------
+PREDICTIVE ACCURACY (NASA C-MAPSS FD001 Test Set)
+--------------------------------------------------------------------------------
 - RMSE: {rmse:.4f}
 - NASA Score: {nasa_score:.2f}
+--------------------------------------------------------------------------------
+DEPLOYMENT CHARACTERISTICS
+--------------------------------------------------------------------------------
 - Latency: {avg_latency:.4f} ms
 - Model Size: {model_size_kb:.2f} KB
+--------------------------------------------------------------------------------
+BIAS & ERROR DISTRIBUTION
+--------------------------------------------------------------------------------
+- Bias: {error_mean:.4f}
+- Bias Std: {error_std:.4f}
+- Safety Margin: {'Positive (Conservative)' if error_mean < 0 else 'Negative (Aggressive)'}
 """
     report_path = os.path.join(run_results_dir, "report.md")
     with open(report_path, "w") as f:

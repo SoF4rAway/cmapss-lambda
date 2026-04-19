@@ -19,8 +19,12 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `conda run -n pytorch-gpu python evaluate.py`
-*   **Last Completed Task:** Restructured project into modular `src/` package and implemented versioned evaluation results in `results/`.
-*   **Current Active Task:** Finalized maintenance-friendly architecture.
+*   **Last Shell Command:** N/A (code authoring session)
+*   **Last Completed Task:** Implemented strict Artifact Versioning in `CMAPSSPreprocessor` and synchronized `tuner.py` and `loaders.py` to use a deterministic feature schema.
+    *   `src/data/preprocess.py`: Dual Fit/Transform modes via `artifact_dir`. New `save_artifacts()` method bundles `scaler.joblib` + `feature_schema.json`. Hardcoded `PROJECT_ROOT` schema export removed.
+    *   `src/data/loaders.py`: Removed hardcoded feature exclusion list comprehensions. `feature_cols: List[str]` is now a mandatory argument to all Dataset classes and `get_dataloaders()`.
+    *   `src/training/tuner.py`: `Objective` receives `feature_cols` explicitly. `run_tuning_pipeline()` returns `preprocessor` + `feature_cols`. `finalize_model()` creates a versioned `models/{timestamp}/` directory and calls `preprocessor.save_artifacts()`.
+    *   `requirements.txt`: Created with `joblib` explicitly listed for environment reproducibility.
+*   **Current Active Task:** None.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Integrate the versioned results and `feature_schema.json` with the downstream Spark Streaming logic.
+*   **Next Planned Step:** Integrate the versioned `models/{timestamp}/` artifact bundle with the downstream Spark Streaming Speed Layer inference logic.

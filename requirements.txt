@@ -1,0 +1,16 @@
+# Core ML / DL
+torch
+torchvision
+torchaudio
+scikit-learn
+joblib
+
+# Hyperparameter Optimization
+optuna
+
+# Data
+pandas
+numpy
+
+# Serialization / Utilities
+python-dotenv
