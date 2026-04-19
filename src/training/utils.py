@@ -25,7 +25,7 @@ def asymmetric_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     d_clamped = torch.clamp(d, min=-65, max=50) 
     loss = torch.where(
         d_clamped < 0, 
-        torch.exp(-d_clamped / 13.0) - 1.0, 
-        torch.exp(d_clamped / 10.0) - 1.0
+        torch.exp(-d_clamped / 15.0) - 1.0, 
+        torch.exp(d_clamped / 8.0) - 1.0
     )
     return torch.mean(loss)

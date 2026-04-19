@@ -70,14 +70,22 @@ class Objective:
 
     def __call__(self, trial):
         num_blocks = trial.suggest_int("num_blocks", 1, 4)
-        out_channels_base = trial.suggest_categorical("out_channels_base", [16, 32, 64])
         kernel_size = trial.suggest_categorical("kernel_size", [3, 5, 7])
-        use_bn = trial.suggest_categorical("use_bn", [True, False])
-        dropout = trial.suggest_float("dropout", 0.0, 0.5)
+        dilation = trial.suggest_int("dilation", 1, 3) 
+        fc_units = trial.suggest_categorical("fc_units", [16, 32, 64])
+        
+        out_channels_list = []
+        use_bn_list = []
+        dropout_list = []
+        for i in range(num_blocks):
+            out_channels_list.append(trial.suggest_categorical(f"out_channels_b{i}", [16, 32, 64]))
+            use_bn_list.append(trial.suggest_categorical(f"use_bn_b{i}", [True, False]))
+            dropout_list.append(trial.suggest_float(f"dropout_b{i}", 0.0, 0.5))
+            
         lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
         
-        out_channels_list = [out_channels_base] * num_blocks
+        # Subsampling for speed during tuning
         subset_train = get_subset_engines(self.train_df, ratio=0.2, seed=42)
         train_loader, val_loader, _ = get_dataloaders(subset_train, self.val_df, self.val_df, batch_size=64, seed=42)
         
@@ -89,27 +97,34 @@ class Objective:
             num_blocks=num_blocks,
             out_channels_list=out_channels_list,
             kernel_size=kernel_size,
-            use_bn=use_bn,
-            dropout=dropout
+            use_bn_list=use_bn_list,
+            dropout_list=dropout_list,
+            fc_units=fc_units
         ).to(self.device)
         
         total_params = sum(p.numel() for p in model.parameters())
         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
         criterion = nn.MSELoss()
         
-        epochs = 20
+        epochs = 15 # Reduced for tuning speed
         best_val_rmse = float('inf')
+        best_val_nasa = float('inf')
+        
         for epoch in range(epochs):
             train_one_epoch(model, train_loader, optimizer, None, self.device)
-            val_rmse, _ = evaluate(model, val_loader, criterion, self.device)
+            val_rmse, val_nasa = evaluate(model, val_loader, criterion, self.device)
+            
             if val_rmse < best_val_rmse:
                 best_val_rmse = val_rmse
+            if val_nasa < best_val_nasa:
+                best_val_nasa = val_nasa
         
+        # Complexity Penalty for hardware constraints
         penalty = 0.0
-        if total_params > 100000:
-            penalty = (total_params - 100000) * 0.01 
+        if total_params > 50000:
+            penalty = (total_params - 50000) * 0.001 
             
-        return best_val_rmse + penalty, 0.0 # Placeholder for 2nd objective if needed
+        return best_val_rmse + penalty, best_val_nasa
 
 def run_tuning_pipeline():
     CMAPSS_DATA_DIR = os.path.join(DATA_DIR, "CMAPSSData")
@@ -118,7 +133,8 @@ def run_tuning_pipeline():
     if not os.path.exists(train_path):
         logger.error(f"Data not found at {train_path}")
         return
-
+    
+    # Align with ARCHITECTURE.md (Piecewise RUL capped at 125)
     preprocessor = CMAPSSPreprocessor(max_rul=125)
     raw_train = preprocessor.load_data(train_path)
     raw_train = preprocessor.add_piecewise_rul(raw_train)
@@ -130,9 +146,11 @@ def run_tuning_pipeline():
     logger.info(f"Using device: {device}")
     
     sampler = optuna.samplers.TPESampler(seed=42)
-    study = optuna.create_study(directions=["minimize", "minimize"], sampler=sampler, pruner=optuna.pruners.MedianPruner())
-    study.optimize(Objective(train_scaled, val_scaled, device), n_trials=100)
+    # Multi-objective study as per user feedback
+    study = optuna.create_study(directions=["minimize", "minimize"], sampler=sampler)
+    study.optimize(Objective(train_scaled, val_scaled, device), n_trials=150)
     
+    # Select best trial based on primary objective (RMSE + Penalty)
     trials = study.best_trials
     trials.sort(key=lambda t: t.values[0])
     best_trial = trials[0]
@@ -143,7 +161,11 @@ def run_tuning_pipeline():
 def finalize_model(best_params, train_df, val_df):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_blocks = best_params["num_blocks"]
-    out_channels_list = [best_params["out_channels_base"]] * num_blocks
+    
+    out_channels_list = [best_params[f"out_channels_b{i}"] for i in range(num_blocks)]
+    use_bn_list = [best_params[f"use_bn_b{i}"] for i in range(num_blocks)]
+    dropout_list = [best_params[f"dropout_b{i}"] for i in range(num_blocks)]
+    
     feature_cols = [c for c in train_df.columns if c not in ["unit_id", "cycle", "rul"]]
     input_channels = len(feature_cols)
     
@@ -152,22 +174,24 @@ def finalize_model(best_params, train_df, val_df):
         num_blocks=num_blocks,
         out_channels_list=out_channels_list,
         kernel_size=best_params["kernel_size"],
-        use_bn=best_params["use_bn"],
-        dropout=best_params["dropout"]
+        use_bn_list=use_bn_list,
+        dropout_list=dropout_list,
+        fc_units=best_params["fc_units"]
     ).to(device)
     
+    # Retrain on full dataset
     train_loader, val_loader, _ = get_dataloaders(train_df, val_df, val_df, batch_size=64, seed=42)
     optimizer = optim.Adam(model.parameters(), lr=best_params["lr"], weight_decay=best_params["weight_decay"])
     criterion = nn.MSELoss()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
     
-    patience = 15
+    patience = 5
     best_val_nasa = float('inf')
     epochs_no_improve = 0
     best_model_state = None
-    max_epochs = 100
+    max_epochs = 70
     
-    logger.info("Retraining final model...")
+    logger.info("Retraining final model on full training set...")
     for epoch in range(max_epochs):
         train_one_epoch(model, train_loader, optimizer, None, device)
         val_rmse, nasa_score = evaluate(model, val_loader, criterion, device)
@@ -187,8 +211,14 @@ def finalize_model(best_params, train_df, val_df):
         model.load_state_dict(best_model_state)
             
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Store locally first, then can be moved to models/
+    os.makedirs(MODELS_DIR, exist_ok=True)
     model_save_path = os.path.join(MODELS_DIR, f"{timestamp}_rul_model.onnx")
-    export_to_onnx(model.cpu(), model_save_path, input_shape=(1, 30, input_channels))
+    
+    # Move to CPU for export
+    model.eval()
+    model.to("cpu")
+    export_to_onnx(model, model_save_path, input_shape=(1, 30, input_channels))
     logger.info(f"Final model saved to {model_save_path}")
 
 if __name__ == "__main__":
