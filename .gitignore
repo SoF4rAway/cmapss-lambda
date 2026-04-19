@@ -43,12 +43,21 @@ venv.bak/
 .DS_Store
 
 # --- ML & Data ---
+# Ignore the entire data directory and its contents
+data/
 /data/
-/models/
+
+# Keep results local-only
+results/
 /results/
+
+# MODIFIED: Models are NO LONGER ignored
+# We only ignore specific temporary weight files to prevent accidental bloat
 *.pt
 *.pth
 *.h5
+
+# Logs and training runs
 runs/
 logs/
 *.log

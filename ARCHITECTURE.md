@@ -53,10 +53,10 @@ The system is evaluated against the NASA C-MAPSS FD001 dataset:
 
 | Metric | Target | Current Baseline |
 | :--- | :--- | :--- |
-| **RMSE** | < 20.0 | **19.15** |
-| **NASA Score** | < 1100 | **1023.09** |
-| **Inference Latency** | < 0.1 ms | **0.07 ms** |
-| **Model Size** | < 500 KB | **378.23 KB** |
+| **RMSE** | < 20.0 | **15.6294** |
+| **NASA Score** | < 500 | **444.88** |
+| **Inference Latency** | < 0.1 ms | **0.0839 ms** |
+| **Model Size** | < 500 KB | **369.48 KB** |
 
 ### NASA Asymmetric Scoring Function
 Where $d_{i} = \hat{y}_{i} - y_{i}$:
