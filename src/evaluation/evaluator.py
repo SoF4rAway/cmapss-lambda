@@ -108,7 +108,13 @@ def run_evaluation_pipeline():
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     sns.scatterplot(x=y_true, y=y_pred, alpha=0.6, ax=ax1, color='#2c3e50')
     ax1.plot([0, 140], [0, 140], '--', color='#e74c3c', linewidth=2)
+    ax1.set_xlabel("True RUL")
+    ax1.set_ylabel("Predicted RUL")
+    ax1.set_title("True vs Predicted RUL")
     sns.histplot(errors, kde=True, ax=ax2, color='#3498db', bins=20)
+    ax2.set_xlabel("Error")
+    ax2.set_ylabel("Count")
+    ax2.set_title("Error Distribution")
     plt.tight_layout()
     
     plot_path = os.path.join(run_results_dir, "academic_performance_results.png")
