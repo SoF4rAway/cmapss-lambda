@@ -19,12 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** N/A (code authoring session)
-*   **Last Completed Task:** Implemented strict Artifact Versioning in `CMAPSSPreprocessor` and synchronized `tuner.py` and `loaders.py` to use a deterministic feature schema.
-    *   `src/data/preprocess.py`: Dual Fit/Transform modes via `artifact_dir`. New `save_artifacts()` method bundles `scaler.joblib` + `feature_schema.json`. Hardcoded `PROJECT_ROOT` schema export removed.
-    *   `src/data/loaders.py`: Removed hardcoded feature exclusion list comprehensions. `feature_cols: List[str]` is now a mandatory argument to all Dataset classes and `get_dataloaders()`.
-    *   `src/training/tuner.py`: `Objective` receives `feature_cols` explicitly. `run_tuning_pipeline()` returns `preprocessor` + `feature_cols`. `finalize_model()` creates a versioned `models/{timestamp}/` directory and calls `preprocessor.save_artifacts()`.
-    *   `requirements.txt`: Created with `joblib` explicitly listed for environment reproducibility.
-*   **Current Active Task:** None.
+*   **Last Shell Command:** `python tune.py` (Completed 300 trials, fixed unpacking error)
+*   **Last Completed Task:** Fixed `ValueError` in `tune.py` by aligning return value unpacking with the updated `run_tuning_pipeline()` (7 values).
+*   **Current Active Task:** Finalizing model artifacts and verifying Pareto front visualization.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Integrate the versioned `models/{timestamp}/` artifact bundle with the downstream Spark Streaming Speed Layer inference logic.
+*   **Next Planned Step:** Integrate the versioned `models/{timestamp}/` artifact bundle (ONNX + Scaler + Schema) with the downstream Spark Streaming Speed Layer inference logic.

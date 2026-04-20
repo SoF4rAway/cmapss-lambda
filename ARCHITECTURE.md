@@ -24,6 +24,10 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 *   **Sliding Window:** 2D telemetry is reshaped into 3D tensors `(batch, channels, window_size)` for 1D-CNN temporal feature extraction.
 *   **Target Labeling:** Piecewise Linear RUL capped at **125 cycles** to reduce early-life noise.
 
+### Operational Modes (Production Ready)
+*   **Fit Mode:** Calculates monotonicity, fits the scaler, and determines the final `active_features` list.
+*   **Transform Mode:** Completely skips selection/fitting. Loads `feature_schema.json` and `scaler.joblib` from a versioned artifact directory for deterministic execution.
+
 ## 4. Lambda Pipeline Phases
 
 ### Phase 1: Ingestion (The Producer)
@@ -32,9 +36,13 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 
 ### Phase 2: Speed Layer (Real-time Inference)
 *   **Mechanism:** Spark Structured Streaming consuming from Kafka.
+*   **Architecture:** MobileNet-inspired 1D-CNN utilizing:
+    *   **Depthwise Separable Convolutions:** Minimizes parameter count for cache residency.
+    *   **Squeeze-and-Excitation (SE) Blocks:** Dynamic channel-wise feature recalibration.
+    *   **Temporal Attention Pooling:** Learned weighting of degradation cycles (replaces naive Global Average Pooling).
 *   **Inference:** Vectorized execution via **Pandas UDFs** loading the ONNX model.
-*   **Optimization:** Model size is kept **<1MB** (current: 378KB) to maximize CPU cache hits and minimize memory bus contention.
-*   **Target Latency:** < 0.1ms per inference (Current benchmark: 0.07ms).
+*   **Optimization:** Model size is kept **<500KB** (current: ~28KB) to maximize CPU cache hits and minimize memory bus contention.
+*   **Target Latency:** < 0.1ms per inference (Current benchmark: 0.05ms).
 
 ### Phase 3: Batch Layer (Historical & Retraining)
 *   **Persistence:** Raw telemetry and predictions are synced to HDFS in Parquet format.
@@ -53,10 +61,10 @@ The system is evaluated against the NASA C-MAPSS FD001 dataset:
 
 | Metric | Target | Current Baseline |
 | :--- | :--- | :--- |
-| **RMSE** | < 20.0 | **15.6294** |
-| **NASA Score** | < 500 | **444.88** |
-| **Inference Latency** | < 0.1 ms | **0.0839 ms** |
-| **Model Size** | < 500 KB | **369.48 KB** |
+| **RMSE** | < 20.0 | **16.2307** |
+| **NASA Score** | < 500 | **356.19** |
+| **Inference Latency** | < 0.1 ms | **0.0515 ms** |
+| **Model Size** | < 500 KB | **27.64 KB** |
 
 ### NASA Asymmetric Scoring Function
 Where $d_{i} = \hat{y}_{i} - y_{i}$:
@@ -66,8 +74,10 @@ $$S = \sum_{i=1}^{n} \left( e^{\frac{d_i}{10}} - 1 \right) \text{ for } d_i \ge 
 ## 6. Ensuring Reproducibility & Maintainability
 * **Global Seed Control**: Centralized `set_seed(42)` in `src/core/config.py` governing Python, NumPy, PyTorch, and CuDNN.
 * **Deterministic DataLoaders**: Multi-threaded loaders use `seed_worker` and `torch.Generator` for absolute data shuffling consistency.
-* **Schema Versioning**: Feature selection results are exported to `feature_schema.json` to synchronize the Spark Streaming pipeline with the trained model's input requirements.
-* **Model Versioning**: All models are stored in `models/` with timestamped filenames (`YYYYMMDD_HHMMSS_rul_model.onnx`).
+* **Artifact Bundling**: Every training run produces a synchronized bundle in `models/{timestamp}/` containing:
+    *   `model.onnx`: The optimized inference graph.
+    *   `scaler.joblib`: The fitted `StandardScaler`.
+    *   `feature_schema.json`: The canonical list of active sensors.
 * **Evaluation Versioning**: Every evaluation run generates a versioned package in `results/{timestamp}/` containing the performance plot (`.png`) and academic report (`.md`).
 
 ## 7. Project Directory Structure
@@ -76,13 +86,15 @@ cmapss-lambda/
 ├── src/                       # Modular source package
 │   ├── core/                  # Global config and reproducibility
 │   ├── data/                  # Preprocessing and DataLoaders
-│   ├── models/                # Architecture definitions
-│   ├── training/              # Tuning and training pipelines
+│   ├── models/                # Architecture definitions (1D-CNN, SE-Blocks)
+│   ├── training/              # Tuning (Optuna) and training pipelines
 │   └── evaluation/            # Benchmarking and reporting
-├── models/                    # Persistent storage for ONNX models
+├── models/                    # Versioned Artifact Bundles
+│   └── {timestamp}/           # model.onnx, scaler.joblib, feature_schema.json
 ├── results/                   # Timestamped evaluation reports
-├── data/                      # Raw C-MAPSS dataset
+│   └── {timestamp}/           # report.md, performance_results.png
+├── data/                      # Raw C-MAPSS dataset (FD001, etc.)
 ├── preprocess.py              # Entry: Data Pipeline
-├── tune.py                    # Entry: Training Pipeline
+├── tune.py                    # Entry: Training Pipeline (NAS)
 └── evaluate.py                # Entry: Evaluation Pipeline
 ```
