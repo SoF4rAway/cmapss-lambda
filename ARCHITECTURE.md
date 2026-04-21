@@ -88,7 +88,9 @@ cmapss-lambda/
 │   ├── data/                  # Preprocessing and DataLoaders
 │   ├── models/                # Architecture definitions (1D-CNN, SE-Blocks)
 │   ├── training/              # Tuning (Optuna) and training pipelines
-│   └── evaluation/            # Benchmarking and reporting
+│   ├── evaluation/            # Benchmarking and reporting
+│   ├── ingestion/             # Kafka producer and data simulation
+│   └── streaming/             # Spark Structured Streaming (Speed Layer)
 ├── models/                    # Versioned Artifact Bundles
 │   └── {timestamp}/           # model.onnx, scaler.joblib, feature_schema.json
 ├── results/                   # Timestamped evaluation reports
