@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -7,6 +5,7 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: ruok,srvr,stat,mntr
     networks:
       - lambda_net
     deploy:
@@ -16,12 +15,19 @@ services:
     volumes:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: [ "CMD", "curl", "-sf", "http://localhost:8080/commands/ruok" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
@@ -40,25 +46,34 @@ services:
           memory: 1.5G
     volumes:
       - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: [ "CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:29092" ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   kafka-setup:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka-setup
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - lambda_net
     entrypoint: [ "/bin/sh", "-c" ]
     command: |
       "
-      # Block until kafka is reachable
       echo 'Waiting for Kafka to be ready...'
       cub kafka-ready -b kafka:29092 1 30
       echo 'Creating kafka topics...'
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --partitions 1 --replication-factor 1 --topic cmapss_telemetry
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 \
+        --partitions 4 --replication-factor 1 --topic cmapss_telemetry
       echo 'Successfully created the following topics:'
       kafka-topics --bootstrap-server kafka:29092 --list
       "
+    # partitions=4 aligns with default Spark parallelism; single partition
+    # was a bottleneck when unit_id key space grows beyond a handful of engines.
 
   namenode:
     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
@@ -78,13 +93,20 @@ services:
           memory: 1.5G
     volumes:
       - hadoop_namenode:/hadoop/dfs/name
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9870" ]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
     container_name: datanode
     restart: always
     depends_on:
-      - namenode
+      namenode:
+        condition: service_healthy
     env_file:
       - ./env/hadoop.env
     networks:
@@ -102,6 +124,11 @@ services:
       dockerfile: Dockerfile.spark
     image: custom-spark:3.5.0
     container_name: spark-master
+    depends_on:
+      kafka:
+        condition: service_healthy
+      namenode:
+        condition: service_healthy
     ports:
       - "8080:8080"
       - "7077:7077"
@@ -117,7 +144,16 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1.5G
+          memory: 4G
+    working_dir: /app
+    volumes:
+      - ./:/app
+    healthcheck:
+      test: [ "CMD", "/opt/bitnami/python/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080')" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   spark-worker:
     build:
@@ -126,7 +162,8 @@ services:
     image: custom-spark:3.5.0
     container_name: spark-worker
     depends_on:
-      - spark-master
+      spark-master:
+        condition: service_healthy
     ports:
       - "8081:8081"
     environment:
@@ -144,7 +181,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 4G
+    working_dir: /app
+    volumes:
+      - ./:/app
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
@@ -163,12 +203,19 @@ services:
           memory: 2.5G
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s" ]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.10.2
     container_name: kibana
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
     ports:
       - "5601:5601"
     environment:
