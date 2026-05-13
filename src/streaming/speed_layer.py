@@ -18,6 +18,8 @@ Key fixes applied:
 
 import os
 import json
+import pickle
+import threading
 import argparse
 import logging
 import numpy as np
@@ -27,10 +29,10 @@ import onnxruntime as ort
 from typing import Iterator, Tuple
 
 from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import col, from_json
+from pyspark.sql.functions import col, from_json, concat, lit
 from pyspark.sql.types import (
     StructType, StructField, IntegerType, FloatType,
-    StringType, BooleanType
+    StringType, BooleanType, BinaryType
 )
 from pyspark.sql.streaming.state import GroupState, GroupStateTimeout
 
@@ -105,7 +107,7 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
         if state.exists:
             # state.get is a property returning a tuple, not a callable method
             state_tuple = state.get
-            history_df = pd.read_json(state_tuple[0], dtype=False)
+            history_df = pickle.loads(state_tuple[0])
         else:
             history_df = pd.DataFrame()
 
@@ -125,7 +127,7 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
         for pdf in pdf_iter:
             # Prevent FutureWarning by avoiding concat on an empty DataFrame
             if history_df.empty:
-                history_df = pdf
+                history_df = pdf.copy()
             else:
                 history_df = pd.concat([history_df, pdf], ignore_index=True)
                 
@@ -175,7 +177,7 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
         # ----------------------------------------------------------------
         # 8. Persist updated history and set 1-hour TTL
         # ----------------------------------------------------------------
-        state.update((history_df.to_json(orient="records"),))
+        state.update((pickle.dumps(history_df, protocol=5),))
         state.setTimeoutDuration(60 * 60 * 1000)  # 1 hour in ms (PySpark 3.5 requires int, not str)
 
         yield pd.DataFrame(results)
@@ -190,36 +192,62 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
 def write_to_sinks(batch_df: DataFrame, batch_id: int) -> None:
     """
     Directs each micro-batch to both the real-time (Elasticsearch) and the
-    historical (HDFS Parquet) layers. Errors in either sink are isolated so
-    that a failure in one does not suppress the other.
+    historical (HDFS Parquet) layers using multi-threading.
     """
     if batch_df.isEmpty():
         return
 
-    # 1. Real-time layer: Elasticsearch
-    try:
-        batch_df.write \
-            .format("org.elasticsearch.spark.sql") \
-            .option("es.nodes", "elasticsearch") \
-            .option("es.port", "9200") \
-            .option("es.nodes.wan.only", "true") \
-            .option("es.index.auto.create", "true") \
-            .option("es.resource", "cmapss_predictions") \
-            .mode("append") \
-            .save()
-        logger.info("Batch %d: pushed to Elasticsearch.", batch_id)
-    except Exception as exc:
-        logger.error("Batch %d: Elasticsearch sink error: %s", batch_id, exc)
+    # Create deterministic doc_id for Elasticsearch Upserts to prevent duplication
+    batch_df = batch_df.withColumn(
+        "doc_id",
+        concat(lit("unit_"), col("unit_id"), lit("_cycle_"), col("time_cycles"))
+    )
 
-    # 2. Batch layer: HDFS / Parquet persistence
-    try:
-        batch_df.write \
-            .format("parquet") \
-            .mode("append") \
-            .save("hdfs://namenode:9000/cmapss/batch_layer/predictions/")
-        logger.info("Batch %d: saved to HDFS (Parquet).", batch_id)
-    except Exception as exc:
-        logger.error("Batch %d: HDFS sink error: %s", batch_id, exc)
+    # Persist the batch to avoid re-computing the 1D-CNN inference for each sink
+    batch_df.persist()
+
+    def write_es():
+        try:
+            batch_df.write \
+                .format("org.elasticsearch.spark.sql") \
+                .option("es.nodes", "elasticsearch") \
+                .option("es.port", "9200") \
+                .option("es.nodes.wan.only", "true") \
+                .option("es.index.auto.create", "true") \
+                .option("es.resource", "cmapss_predictions") \
+                .option("es.mapping.id", "doc_id") \
+                .option("es.write.operation", "upsert") \
+                .mode("append") \
+                .save()
+            logger.info("Batch %d: pushed to Elasticsearch.", batch_id)
+        except Exception as exc:
+            logger.error("Batch %d: Elasticsearch sink error: %s", batch_id, exc)
+
+    def write_hdfs():
+        try:
+            batch_df.write \
+                .format("parquet") \
+                .mode("append") \
+                .save("hdfs://namenode:9000/cmapss/batch_layer/predictions/")
+            logger.info("Batch %d: saved to HDFS (Parquet).", batch_id)
+        except Exception as exc:
+            logger.error("Batch %d: HDFS sink error: %s", batch_id, exc)
+
+    # Ensure Kibana receives updates immediately
+    es_thread = threading.Thread(target=write_es)
+    es_thread.start()
+
+    # HDFS as a background fire-and-forget task, every 10 batches
+    if batch_id % 10 == 0:
+        hdfs_thread = threading.Thread(target=write_hdfs)
+        hdfs_thread.daemon = True
+        hdfs_thread.start()
+
+    # Block only on Elasticsearch to confirm Real-time SLA
+    es_thread.join()
+
+    # Free memory asynchronously without blocking background HDFS writes
+    batch_df.unpersist(blocking=False)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +277,10 @@ def main() -> None:
         SparkSession.builder
         .appName("CMAPSS-Speed-Layer")
         .config("spark.sql.streaming.checkpointLocation", args.checkpoint_dir)
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.executor.cores", "2")
+        .config("spark.cores.max", "2")
+        .config("spark.sql.streaming.asyncProgressTrackingEnabled", "false")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
@@ -295,9 +327,9 @@ def main() -> None:
         ]
     )
 
-    # The state stores a single JSON string column.
+    # The state stores a single binary blob (pickled pandas DataFrame).
     state_schema = StructType(
-        [StructField("state_json", StringType(), False)]
+        [StructField("state_binary", BinaryType(), False)]
     )
 
     # ------------------------------------------------------------------
@@ -311,7 +343,8 @@ def main() -> None:
         .format("kafka")
         .option("kafka.bootstrap.servers", args.kafka_broker)
         .option("subscribe", "cmapss_telemetry")
-        .option("startingOffsets", "latest")
+        .option("startingOffsets", "earliest")
+        .option("maxOffsetsPerTrigger", 500)
         .option("failOnDataLoss", "false")
         .load()
     )
@@ -351,6 +384,7 @@ def main() -> None:
         .foreachBatch(write_to_sinks)
         .outputMode("update")
         .option("checkpointLocation", args.checkpoint_dir)
+        .trigger(processingTime="2 seconds")
         .start()
     )
 
