@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** N/A (code authoring session)
-*   **Last Completed Task:** Built the PySpark Structured Streaming Speed Layer (`src/streaming/speed_layer.py`) with stateful ONNX inference, dual Elasticsearch/HDFS sinks, and safety alerts.
-*   **Current Active Task:** None. Speed Layer implementation complete.
-*   **Known Blockers/Issues:** `kafka-python` must be installed in the `pytorch-gpu` conda env before running (`pip install kafka-python`). Docker stack must be up: `docker compose up -d zookeeper kafka kafka-setup`.
-*   **Next Planned Step:** End-to-end integration testing and Kibana dashboard verification.
+*   **Last Shell Command:** `docker exec -it spark-master spark-submit --packages ... src/streaming/speed_layer.py ...`
+*   **Last Completed Task:** Implemented Tiered Sink Strategy (sync Elasticsearch, daemon HDFS every 10 batches), resolved `FutureWarning` in Pandas UDFs, and optimized Elasticsearch `refresh_interval` to 100ms for sub-second Kibana updates.
+*   **Current Active Task:** Spark Speed Layer is optimized and ready for low-latency telemetry processing.
+*   **Known Blockers/Issues:** None.
+*   **Next Planned Step:** Start the Kafka producer and verify sub-second end-to-end latency in the Kibana dashboard.
