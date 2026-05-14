@@ -125,65 +125,70 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
         # 4. Process micro-batch partitions for this unit_id
         # ----------------------------------------------------------------
         for pdf in pdf_iter:
-            # 1. Clean incoming partition to prevent 'all-NA' FutureWarnings
+            # 1. Clean and ensure chronological ordering
             pdf_clean = pdf.dropna(axis=1, how='all')
             if pdf_clean.empty:
                 continue
-                
-            # 2. Prevent FutureWarning by avoiding concat on an empty DataFrame
+            pdf_clean = pdf_clean.sort_values("time_cycles")
+
+            num_new_rows = len(pdf_clean)
+
+            # 2. Append all new data to history state at once
             if history_df.empty:
                 history_df = pdf_clean.copy()
             else:
                 history_df = pd.concat([history_df, pdf_clean], ignore_index=True)
-                
-            history_df = history_df.sort_values("time_cycles").tail(30)
 
-            # ----------------------------------------------------------------
-            # 5. Preprocessing: pruning & scaling
-            # ----------------------------------------------------------------
-            # Explicitly enforce float32 to fix JSON round-trip dtype regression
-            # (integers parsed as int64 cause shape mismatches inside the scaler).
+            history_df = history_df.sort_values("time_cycles").reset_index(drop=True)
+            total_rows = len(history_df)
+
+            # 3. Vectorized Preprocessing (Scale the full history at once)
             history_df[active_features] = history_df[active_features].astype(np.float32)
-            features_subset = history_df[active_features]
-            scaled_features = scaler.transform(features_subset)
+            scaled_all = scaler.transform(history_df[active_features])
 
-            # ----------------------------------------------------------------
-            # 6. Cold-start logic: zero-pad sequences shorter than 30 cycles
-            # ----------------------------------------------------------------
-            current_len = len(scaled_features)
-            if current_len < 30:
-                pad_len = 30 - current_len
-                padding = np.zeros((pad_len, len(active_features)), dtype=np.float32)
-                tensor_input = np.vstack([padding, scaled_features])
-            else:
-                tensor_input = scaled_features
+            # 4. Sliding Window Inference for each NEW row
+            for i in range(total_rows - num_new_rows, total_rows):
+                window_start = max(0, i + 1 - 30)
+                window_end = i + 1
 
-            # Reshape to (1, 30, num_features) — matches model input signature
-            tensor_input = tensor_input.reshape(
-                1, 30, len(active_features)
-            ).astype(np.float32)
+                window_features = scaled_all[window_start:window_end]
+                current_len = len(window_features)
 
-            # ----------------------------------------------------------------
-            # 7. Inference & output clamping
-            # ----------------------------------------------------------------
-            raw_output = session.run(None, {input_name: tensor_input})[0][0][0]
-            predicted_rul = float(np.clip(raw_output, 0.0, 125.0))
+                # Cold-start zero-padding
+                if current_len < 30:
+                    pad_len = 30 - current_len
+                    padding = np.zeros((pad_len, len(active_features)), dtype=np.float32)
+                    tensor_input = np.vstack([padding, window_features])
+                else:
+                    tensor_input = window_features
 
-            latest_cycle = int(history_df["time_cycles"].max())
-            results.append(
-                {
-                    "unit_id": int(key[0]),
-                    "time_cycles": latest_cycle,
-                    "predicted_rul": predicted_rul,
-                    "is_critical": bool(predicted_rul < 30.0),
-                }
-            )
+                # Reshape to (1, 30, num_features)
+                tensor_input = tensor_input.reshape(
+                    1, 30, len(active_features)
+                ).astype(np.float32)
+
+                # Inference
+                raw_output = session.run(None, {input_name: tensor_input})[0][0][0]
+                predicted_rul = float(np.clip(raw_output, 0.0, 125.0))
+
+                # Explicit Dtype Control via .item()
+                cycle = history_df.iloc[i]["time_cycles"].item()
+
+                results.append(
+                    {
+                        "unit_id": int(key[0]),
+                        "time_cycles": int(cycle),
+                        "predicted_rul": predicted_rul,
+                        "is_critical": bool(predicted_rul < 30.0),
+                    }
+                )
 
         # ----------------------------------------------------------------
-        # 8. Persist updated history and set 1-hour TTL
+        # 8. Persist updated history (last 30 cycles) and set 1-hour TTL
         # ----------------------------------------------------------------
+        history_df = history_df.tail(30)
         state.update((pickle.dumps(history_df, protocol=5),))
-        state.setTimeoutDuration(60 * 60 * 1000)  # 1 hour in ms (PySpark 3.5 requires int, not str)
+        state.setTimeoutDuration(60 * 60 * 1000)
 
         yield pd.DataFrame(results)
 
@@ -230,8 +235,9 @@ def write_to_sinks(batch_df: DataFrame, batch_id: int) -> None:
 
     def write_hdfs():
         try:
-            batch_df.write \
+            batch_df.coalesce(1).write \
                 .format("parquet") \
+                .option("parquet.block.size", "104857600") \
                 .mode("append") \
                 .save("hdfs://namenode:9000/cmapss/batch_layer/predictions/")
             logger.info("Batch %d: saved to HDFS (Parquet).", batch_id)

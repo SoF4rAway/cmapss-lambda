@@ -36,17 +36,16 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 *   **Throughput Control**: Streams at a controlled rate (~20 msgs/sec) with an optimized flush strategy (every 10 messages). This preserves Kafka's internal record-batching efficiency while keeping end-to-end latency strictly bounded.
 
 ### Phase 2: Speed Layer (Real-time Inference)
-*   **Mechanism:** Spark Structured Streaming consuming from Kafka, configured with a 2-second processing trigger.
-*   **State Management:** Maintains a 30-cycle engine history buffer using `applyInPandasWithState`. State is serialized as binary Pickle (Protocol 5) rather than JSON to eliminate computational overhead.
-*   **Architecture:** MobileNet-inspired 1D-CNN utilizing:
-    *   **Depthwise Separable Convolutions:** Minimizes parameter count for cache residency.
-    *   **Squeeze-and-Excitation (SE) Blocks:** Dynamic channel-wise feature recalibration.
-    *   **Temporal Attention Pooling:** Learned weighting of degradation cycles.
+*   **Mechanism:** Spark Structured Streaming consuming from Kafka, configured with a 2-second processing trigger and `maxOffsetsPerTrigger` to manage backpressure.
+*   **State Management:** Maintains a 30-cycle engine history buffer using `applyInPandasWithState`. State is serialized as binary **Pickle (Protocol 5)** to maximize throughput.
+*   **Zero Data Loss UDF:** Uses a **Vectorized Sliding Window** approach inside the Pandas UDF. This ensures that every single telemetry message results in a prediction, even when messages are clumped together in a single micro-batch, by sliding a 30-cycle window over the entire incoming data partition.
+*   **Performance Tuning:** 
+    *   **Shuffle Optimization:** `spark.sql.shuffle.partitions` is set to 2 (matching Kafka partitions) to eliminate the default 200-task scheduling overhead.
+    *   **Vectorization:** Features are scaled in a single batch before the inference loop to minimize compute cycles.
 *   **Inference:** Vectorized execution via **Pandas UDFs** loading the ONNX model. Broadcast variables (model, schema, scaler) are explicitly bound via closures to guarantee correct executor serialization.
-*   **Optimization:** Model size is kept **<500KB** (current: ~28KB) to maximize CPU cache hits and minimize memory bus contention.
 *   **Multi-Sink Strategy:** Uses a tiered approach within `foreachBatch` to decouple output streams:
-    *   **Hot Path (Sync):** Writes to Elasticsearch in the foreground to guarantee sub-second dashboard updates.
-    *   **Cold Path (Async):** Offloads HDFS Parquet writes to a non-blocking daemon thread every 10 micro-batches, preventing slow storage from bottlenecking the inference pipeline.
+    *   **Hot Path (Sync):** Writes to Elasticsearch in the foreground (blocking) to guarantee sub-second dashboard updates.
+    *   **Cold Path (Async):** Offloads HDFS Parquet writes to a non-blocking daemon thread every 10 micro-batches. Uses `.coalesce(1)` and 100MB block sizes to stabilize the Datanode buffer.
 *   **Target Latency:** < 0.1ms per inference (Current benchmark: 0.05ms).
 
 ### Phase 3: Batch Layer (Historical & Retraining)
