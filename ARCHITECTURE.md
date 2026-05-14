@@ -8,8 +8,8 @@ priority: 1 (Absolute Source of Truth for Implementation)
 Build a high-performance, safety-critical Big Data system to ingest, process, and analyze NASA C-MAPSS turbofan telemetry. The system utilizes a "TinyML" approach to predict Remaining Useful Life (RUL) with sub-millisecond latency.
 
 ## 2. Infrastructure Stack (Dockerized)
-*   **Ingestion:** Apache Kafka (Topic: `cmapss_telemetry`) + Zookeeper.
-*   **Stream Processing:** Spark Structured Streaming (Python/PySpark).
+*   **Ingestion:** Apache Kafka (Topic: `cmapss_telemetry`) + Zookeeper (Configured with HTTP Admin API healthchecks for robust startup).
+*   **Stream Processing:** Spark Structured Streaming (Python/PySpark) with strict container initialization dependencies.
 *   **Inference Engine:** ONNX Runtime (Optimized for x64 L1/L2 Cache residency).
 *   **Storage (Cold):** HDFS / Parquet (Snappy Compression).
 *   **Observability (Hot):** Elasticsearch + Kibana (Real-time RUL Dashboards).
@@ -31,26 +31,31 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 ## 4. Lambda Pipeline Phases
 
 ### Phase 1: Ingestion (The Producer)
-*   Python-based simulator reading `.txt` source files.
-*   Serializes sensor arrays into **JSON payloads** keyed by `unit_id` to ensure partition-local stateful processing in Spark.
+*   **Mechanism**: Python-based simulator reading `.txt` source files.
+*   **Serialization**: Sensor arrays are serialized into **JSON payloads** keyed by `unit_id` to guarantee partition-local stateful processing in Spark.
+*   **Throughput Control**: Streams at a controlled rate (~20 msgs/sec) with an optimized flush strategy (every 10 messages). This preserves Kafka's internal record-batching efficiency while keeping end-to-end latency strictly bounded.
 
 ### Phase 2: Speed Layer (Real-time Inference)
-*   **Mechanism:** Spark Structured Streaming consuming from Kafka.
+*   **Mechanism:** Spark Structured Streaming consuming from Kafka, configured with a 2-second processing trigger.
+*   **State Management:** Maintains a 30-cycle engine history buffer using `applyInPandasWithState`. State is serialized as binary Pickle (Protocol 5) rather than JSON to eliminate computational overhead.
 *   **Architecture:** MobileNet-inspired 1D-CNN utilizing:
     *   **Depthwise Separable Convolutions:** Minimizes parameter count for cache residency.
     *   **Squeeze-and-Excitation (SE) Blocks:** Dynamic channel-wise feature recalibration.
-    *   **Temporal Attention Pooling:** Learned weighting of degradation cycles (replaces naive Global Average Pooling).
-*   **Inference:** Vectorized execution via **Pandas UDFs** loading the ONNX model.
+    *   **Temporal Attention Pooling:** Learned weighting of degradation cycles.
+*   **Inference:** Vectorized execution via **Pandas UDFs** loading the ONNX model. Broadcast variables (model, schema, scaler) are explicitly bound via closures to guarantee correct executor serialization.
 *   **Optimization:** Model size is kept **<500KB** (current: ~28KB) to maximize CPU cache hits and minimize memory bus contention.
+*   **Multi-Sink Strategy:** Uses a tiered approach within `foreachBatch` to decouple output streams:
+    *   **Hot Path (Sync):** Writes to Elasticsearch in the foreground to guarantee sub-second dashboard updates.
+    *   **Cold Path (Async):** Offloads HDFS Parquet writes to a non-blocking daemon thread every 10 micro-batches, preventing slow storage from bottlenecking the inference pipeline.
 *   **Target Latency:** < 0.1ms per inference (Current benchmark: 0.05ms).
 
 ### Phase 3: Batch Layer (Historical & Retraining)
-*   **Persistence:** Raw telemetry and predictions are synced to HDFS in Parquet format.
+*   **Persistence:** Raw telemetry and predictions are synced to HDFS in Parquet format via asynchronous daemon threads managed by the Speed Layer.
 *   **Retraining Loop:** Periodic batch jobs trigger PyTorch retraining if statistical drift (Bias > 10.0) is detected.
 *   **Redeploy:** Automated export to **ONNX (Opset 14)** for hot-swapping into the Speed Layer.
 
 ### Phase 4: Serving (ELK Stack)
-*   **Sink:** Predictions pushed to Elasticsearch via `spark-elasticsearch` connector.
+*   **Sink:** Predictions are pushed to Elasticsearch via the `spark-elasticsearch` connector. We enforce deterministic document IDs (`unit_X_cycle_Y`) and `upsert` operations to eliminate duplicate records.
 *   **Visualization:** Kibana dashboards tracking:
     *   Individual Engine Health (RUL countdown).
     *   System-wide Error Distribution (Residuals).

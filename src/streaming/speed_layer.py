@@ -125,11 +125,16 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
         # 4. Process micro-batch partitions for this unit_id
         # ----------------------------------------------------------------
         for pdf in pdf_iter:
-            # Prevent FutureWarning by avoiding concat on an empty DataFrame
+            # 1. Clean incoming partition to prevent 'all-NA' FutureWarnings
+            pdf_clean = pdf.dropna(axis=1, how='all')
+            if pdf_clean.empty:
+                continue
+                
+            # 2. Prevent FutureWarning by avoiding concat on an empty DataFrame
             if history_df.empty:
-                history_df = pdf.copy()
+                history_df = pdf_clean.copy()
             else:
-                history_df = pd.concat([history_df, pdf], ignore_index=True)
+                history_df = pd.concat([history_df, pdf_clean], ignore_index=True)
                 
             history_df = history_df.sort_values("time_cycles").tail(30)
 
@@ -281,6 +286,7 @@ def main() -> None:
         .config("spark.executor.cores", "2")
         .config("spark.cores.max", "2")
         .config("spark.sql.streaming.asyncProgressTrackingEnabled", "false")
+        .config("spark.sql.shuffle.partitions", "2")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
@@ -344,7 +350,7 @@ def main() -> None:
         .option("kafka.bootstrap.servers", args.kafka_broker)
         .option("subscribe", "cmapss_telemetry")
         .option("startingOffsets", "earliest")
-        .option("maxOffsetsPerTrigger", 500)
+        .option("maxOffsetsPerTrigger", 300)
         .option("failOnDataLoss", "false")
         .load()
     )
@@ -384,7 +390,7 @@ def main() -> None:
         .foreachBatch(write_to_sinks)
         .outputMode("update")
         .option("checkpointLocation", args.checkpoint_dir)
-        .trigger(processingTime="2 seconds")
+        .trigger(processingTime="5 seconds")
         .start()
     )
 
