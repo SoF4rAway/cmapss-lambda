@@ -269,14 +269,15 @@ def stream_telemetry(
             if message_count % FLUSH_INTERVAL == 0:
                 producer.flush()
 
-            msg_bytes = len(json.dumps(payload).encode("utf-8"))
-            logger.info(
-                "unit_id=%-3s | cycle=%-4s | msg_size=%d bytes | total_sent=%d",
-                payload["unit_id"],
-                payload["time_cycles"],
-                msg_bytes,
-                message_count,
-            )
+            if message_count % 100 == 0:
+                msg_bytes = len(json.dumps(payload).encode("utf-8"))
+                logger.info(
+                    "unit_id=%-3s | cycle=%-4s | msg_size=%d bytes | total_sent=%d",
+                    payload["unit_id"],
+                    payload["time_cycles"],
+                    msg_bytes,
+                    message_count,
+                )
 
             time.sleep(sleep_interval)
 
