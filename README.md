@@ -4,7 +4,7 @@ A high-performance Big Data system for real-time Remaining Useful Life (RUL) pre
 
 ## 🚀 Key Features
 
-*   **Sub-Millisecond Inference**: Cache-optimized 1D-CNN (MobileNet-inspired, <500KB) achieving ~0.05ms inference.
+*   **Sub-Millisecond Inference**: Cache-optimized 1D-CNN (MobileNet-inspired, <500KB) achieving ~0.04ms inference.
 *   **Zero Data Loss Streaming**: Vectorized sliding-window Pandas UDFs in Spark ensure every telemetry tick is processed and predicted.
 *   **Tiered Multi-Sink**: Decoupled Hot Path (Synchronous Elasticsearch Upserts) and Cold Path (Asynchronous Daemon-thread HDFS writes).
 *   **Production State Management**: State maintained via high-performance binary **Pickle (Protocol 5)** serialization.
@@ -21,10 +21,10 @@ A high-performance Big Data system for real-time Remaining Useful Life (RUL) pre
 
 | Metric | Target | Current Baseline |
 | :--- | :--- | :--- |
-| **RMSE** | < 20.0 | **16.2307** |
-| **NASA Score** | < 500 | **356.19** |
-| **Inference Latency** | < 0.1 ms | **0.0515 ms** |
-| **Model Size** | < 500 KB | **27.64 KB** |
+| **RMSE** | < 20.0 | **15.3680** |
+| **NASA Score** | < 500 | **308.66** |
+| **Inference Latency** | < 0.1 ms | **0.0381 ms** |
+| **Model Size** | < 500 KB | **22.14 KB** |
 
 ## 📂 Project Structure
 
@@ -36,7 +36,7 @@ cmapss-lambda/
 │   ├── models/                # Architecture definitions (1D-CNN, SE-Blocks)
 │   ├── training/              # Tuning (Optuna) and training pipelines
 │   ├── evaluation/            # Benchmarking and reporting
-│   ├── ingestion/             # Kafka producer and data simulation
+│   ├── ingestion/             # Kafka producer and drift simulation
 │   └── streaming/             # Spark Structured Streaming (Speed Layer)
 ├── models/                    # Versioned Artifact Bundles
 ├── results/                   # Timestamped evaluation reports
@@ -67,6 +67,13 @@ docker exec -it spark-master spark-submit \
 Run the Kafka producer simulator:
 ```bash
 python -m src.ingestion.kafka_producer
+```
+
+### 4. Optional: Test Resilience (Drift Injection)
+Inject progressive noise and scalar drift to test system robustness:
+```bash
+python -m src.ingestion.generate_drift_data
+# Then update kafka_producer.py to stream test_FD001_drifted.txt
 ```
 
 ---
