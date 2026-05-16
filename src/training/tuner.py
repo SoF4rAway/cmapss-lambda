@@ -741,6 +741,14 @@ def finalize_model(
     #   CPUExecutionProvider in ONNX Runtime requires fp32 inputs/weights.
     export_model = model._orig_mod if hasattr(model, "_orig_mod") else model
     export_model.float().cpu().eval()
+
+    # 1. PyTorch Native Save (Dual Exporting Strategy)
+    pth_save_path = os.path.join(save_dir, "model.pth")
+    set_seed(42)  # Enforce strict determinism prior to PyTorch native serialization
+    torch.save(export_model.state_dict(), pth_save_path)
+    logger.info(f"Exported PyTorch weights to '{pth_save_path}'.")
+
+    # 2. ONNX Export
     model_save_path = os.path.join(save_dir, "model.onnx")
     export_to_onnx(export_model, model_save_path, input_shape=(1, 30, input_channels))
     logger.info(f"Exported ONNX model to '{model_save_path}'.")
@@ -752,6 +760,7 @@ def finalize_model(
 
     logger.info(
         f"Artifact bundle complete → '{save_dir}'\n"
+        f"  • model.pth           ({os.path.getsize(pth_save_path) / 1024:.1f} KB)\n"
         f"  • model.onnx          ({os.path.getsize(model_save_path) / 1024:.1f} KB)\n"
         f"  • scaler.joblib\n"
         f"  • feature_schema.json\n"
