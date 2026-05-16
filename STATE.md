@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `docker exec -it spark-master spark-submit --packages ... src/streaming/speed_layer.py ...`
-*   **Last Completed Task:** Fully synchronized [ARCHITECTURE.md](file:///mnt/d/Repositories/personal-projects/ai-ml-projects/cmapss-lambda/ARCHITECTURE.md) with the current codebase, documenting the Zero Data Loss sliding window logic, Tiered Sink threading strategy, and `shuffle.partitions` performance tuning.
-*   **Current Active Task:** System is fully optimized, documented, and operating in production mode.
+*   **Last Shell Command:** `python -m src.ingestion.generate_drift_data`
+*   **Last Completed Task:** Implemented `src/ingestion/generate_drift_data.py` to programmatically inject Gaussian noise and linear scalar drift into C-MAPSS telemetry data for Lambda architecture validation. Generated `data/CMAPSSData/test_FD001_drifted.txt`.
+*   **Current Active Task:** Monitoring the integration of drifted data into the Kafka ingestion pipeline.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Monitor for long-term drift or potential scale-up of the worker nodes.
+*   **Next Planned Step:** Validate the Spark Speed Layer's resilience against the newly generated data drift.

@@ -27,6 +27,7 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 ### Operational Modes (Production Ready)
 *   **Fit Mode:** Calculates monotonicity, fits the scaler, and determines the final `active_features` list.
 *   **Transform Mode:** Completely skips selection/fitting. Loads `feature_schema.json` and `scaler.joblib` from a versioned artifact directory for deterministic execution.
+*   **Drift Injection (Validation):** Programmatic simulation of field anomalies using `generate_drift_data.py`. This injects progressive Gaussian noise and linear scalar drift into telemetry to validate Speed Layer resilience.
 
 ## 4. Lambda Pipeline Phases
 
@@ -36,7 +37,7 @@ Build a high-performance, safety-critical Big Data system to ingest, process, an
 *   **Throughput Control**: Streams at a controlled rate (~20 msgs/sec) with an optimized flush strategy (every 10 messages). This preserves Kafka's internal record-batching efficiency while keeping end-to-end latency strictly bounded.
 
 ### Phase 2: Speed Layer (Real-time Inference)
-*   **Mechanism:** Spark Structured Streaming consuming from Kafka, configured with a 2-second processing trigger and `maxOffsetsPerTrigger` to manage backpressure.
+*   **Mechanism:** Spark Structured Streaming consuming from Kafka, configured with a **5-second** processing trigger and `maxOffsetsPerTrigger=300` to manage backpressure.
 *   **State Management:** Maintains a 30-cycle engine history buffer using `applyInPandasWithState`. State is serialized as binary **Pickle (Protocol 5)** to maximize throughput.
 *   **Zero Data Loss UDF:** Uses a **Vectorized Sliding Window** approach inside the Pandas UDF. This ensures that every single telemetry message results in a prediction, even when messages are clumped together in a single micro-batch, by sliding a 30-cycle window over the entire incoming data partition.
 *   **Performance Tuning:** 
@@ -65,10 +66,10 @@ The system is evaluated against the NASA C-MAPSS FD001 dataset:
 
 | Metric | Target | Current Baseline |
 | :--- | :--- | :--- |
-| **RMSE** | < 20.0 | **16.2307** |
-| **NASA Score** | < 500 | **356.19** |
-| **Inference Latency** | < 0.1 ms | **0.0515 ms** |
-| **Model Size** | < 500 KB | **27.64 KB** |
+| **RMSE** | < 20.0 | **15.3680** |
+| **NASA Score** | < 500 | **308.66** |
+| **Inference Latency** | < 0.1 ms | **0.0381 ms** |
+| **Model Size** | < 500 KB | **22.14 KB** |
 
 ### NASA Asymmetric Scoring Function
 Where $d_{i} = \hat{y}_{i} - y_{i}$:
@@ -93,7 +94,7 @@ cmapss-lambda/
 │   ├── models/                # Architecture definitions (1D-CNN, SE-Blocks)
 │   ├── training/              # Tuning (Optuna) and training pipelines
 │   ├── evaluation/            # Benchmarking and reporting
-│   ├── ingestion/             # Kafka producer and data simulation
+│   ├── ingestion/             # Kafka producer and drift simulation
 │   └── streaming/             # Spark Structured Streaming (Speed Layer)
 ├── models/                    # Versioned Artifact Bundles
 │   └── {timestamp}/           # model.onnx, scaler.joblib, feature_schema.json
