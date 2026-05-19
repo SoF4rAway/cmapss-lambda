@@ -160,15 +160,24 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
             logger.warning(f"Failed to initialize SparkSession: {e}. Degrading to pandas fallback.")
 
     # 2. Load and align datasets
+    # Discovery of model directory first so we can instantiate the preprocessor in Transform Mode
+    latest_model_dir = get_latest_model_dir(MODELS_DIR)
+
+    # Instantiate preprocessor in Transform Mode (loads features and scaler from baseline)
+    preprocessor = CMAPSSPreprocessor(max_rul=125, artifact_dir=latest_model_dir)
+
     hdfs_path = "hdfs://namenode:9000/cmapss/batch_layer/predictions/"
     hdfs_pd = load_hdfs_telemetry(spark, hdfs_path)
 
     # Load baseline dataset
-    preprocessor = CMAPSSPreprocessor(max_rul=125)
     base_train_path = os.path.join(DATA_DIR, "CMAPSSData", "train_FD001.txt")
     base_pd = preprocessor.load_data(base_train_path)
 
+    # Assign source-based sample weights
+    base_pd["sample_weight"] = 1.0
+
     if hdfs_pd is not None and not hdfs_pd.empty:
+        hdfs_pd["sample_weight"] = 0.3
         # Prevent unit_id collision between baseline and streaming engines
         max_base_unit = base_pd["unit_id"].max()
         hdfs_pd["unit_id"] = hdfs_pd["unit_id"] + max_base_unit
@@ -181,8 +190,6 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
         combined_pd = base_pd
 
     # 3. Dynamic Model Directory Discovery & Hyperparameter loading
-    latest_model_dir = get_latest_model_dir(MODELS_DIR)
-    
     # Load feature schema to ensure exact column mapping matches the baseline network dimensions
     schema_path = os.path.join(latest_model_dir, "feature_schema.json")
     with open(schema_path, "r") as f:
@@ -218,13 +225,13 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
     # Split combined engines into train/validation to prevent temporal leakage
     train_set, val_set = preprocessor.split_train_val_by_engine(combined_pd, val_ratio=0.1, seed=42)
 
-    # Re-fit the StandardScaler on the new combined training dataset to update global statistics
-    preprocessor.active_features = active_features
-    preprocessor.scaler.fit(train_set[active_features])
-
-    # Transform training and validation sets using the newly fitted scaler
+    # Transform training and validation sets using the locked scaler (fit is skipped)
     train_scaled = preprocessor.transform(train_set)
     val_scaled = preprocessor.transform(val_set)
+
+    # Re-attach sample_weight column since transform() drops non-feature, non-metadata columns
+    train_scaled["sample_weight"] = train_set["sample_weight"].values
+    val_scaled["sample_weight"] = val_set["sample_weight"].values
 
     # Create 3D sliding window tensors (batch, channels, 30) grouped by unit_id
     train_loader, val_loader, _ = get_dataloaders(
@@ -234,7 +241,10 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
         feature_cols=active_features,
         sequence_length=30,
         batch_size=64,
-        seed=42
+        seed=42,
+        train_weights=train_scaled["sample_weight"].values,
+        val_weights=val_scaled["sample_weight"].values,
+        return_weights=True
     )
 
     # 5. Instantiate CNN-SE Architecture & Load baseline weights
@@ -270,12 +280,13 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
-        for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
+        for x, y, w in train_loader:
+            x, y, w = x.to(device), y.to(device), w.to(device)
             optimizer.zero_grad(set_to_none=True)
             
             outputs = model(x)
-            loss = criterion(outputs, y)
+            raw_loss = criterion(outputs, y, reduction="none")
+            loss = torch.mean(raw_loss * w)
             
             loss.backward()
             optimizer.step()
@@ -288,10 +299,12 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(device), y.to(device)
+            for x, y, w in val_loader:
+                x, y, w = x.to(device), y.to(device), w.to(device)
                 outputs = model(x)
-                val_loss += criterion(outputs, y).item() * x.size(0)
+                raw_loss = criterion(outputs, y, reduction="none")
+                loss = torch.mean(raw_loss * w)
+                val_loss += loss.item() * x.size(0)
         val_epoch_loss = val_loss / len(val_loader.dataset)
         
         logger.info(

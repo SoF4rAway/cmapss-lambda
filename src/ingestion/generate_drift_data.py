@@ -1,9 +1,9 @@
 """
-Module for generating drifted C-MAPSS telemetry data.
+Module for generating realistic drifted C-MAPSS telemetry data.
 
 This script reads the original NASA C-MAPSS test data and programmatically
-injects sensor degradation (progressive Gaussian noise) and environmental
-drift (linear scalar offset) to simulate field anomalies.
+injects realistic sensor degradation (sub-linear Gaussian noise calibrated per sensor) 
+and environmental drift (linear scalar offset) to simulate field anomalies.
 """
 
 import logging
@@ -24,22 +24,15 @@ logger = logging.getLogger(__name__)
 np.random.seed(42)
 
 
-def generate_drift_data(
+def generate_drift_data_realistic(
     input_filename: str = "test_FD001.txt",
     output_filename: str = "test_FD001_drifted.txt",
-    noise_scale: float = 0.001,
-    drift_scale: float = 0.01,
+    noise_factor: float = 0.05,      # Noise tambahan maksimum 5% dari std asli sensor
+    drift_factor: float = 0.01,      # Drift per siklus sebesar 1% dari std asli sensor
     drift_sensors: List[str] = None
 ) -> None:
     """
-    Reads C-MAPSS data and injects noise and drift.
-
-    Args:
-        input_filename: Name of the original NASA C-MAPSS file.
-        output_filename: Name of the file to save the modified data.
-        noise_scale: Factor scaling Gaussian noise variance with time_cycles.
-        drift_scale: Factor scaling linear drift with time_cycles.
-        drift_sensors: List of sensor names to apply linear drift to.
+    Reads C-MAPSS data and injects realistic, sensor-scaled noise and drift.
     """
     if drift_sensors is None:
         drift_sensors = ["sensor_2", "sensor_11", "sensor_15"]
@@ -58,8 +51,6 @@ def generate_drift_data(
     ] + [f"sensor_{i}" for i in range(1, 22)]
 
     logger.info("Reading raw data from %s...", input_path)
-    # The original NASA files are space-separated and often have trailing spaces
-    # resulting in an extra NaN column if not handled.
     try:
         df = pd.read_csv(
             input_path,
@@ -72,36 +63,50 @@ def generate_drift_data(
         logger.error("Failed to read data: %s", e)
         return
 
-    logger.info("Injecting progressive Gaussian noise (scale=%s)...", noise_scale)
-    # Apply noise to all sensor columns (5 to 25)
-    for i in range(1, 22):
-        sensor_col = f"sensor_{i}"
-        # Standard deviation scales with time_cycles: std = noise_scale * time_cycles
+    # Hitung standar deviasi asli tiap sensor untuk skala gangguan yang adil
+    logger.info("Calculating baseline sensor volatilities...")
+    sensor_cols = [f"sensor_{i}" for i in range(1, 22)]
+    baseline_std = df[sensor_cols].std()
+
+    logger.info("Injecting realistic sub-linear Gaussian noise...")
+    # Menggunakan akar kuadrat waktu agar noise tidak meledak di siklus akhir (sub-linear)
+    time_factor = np.sqrt(df["time_cycles"])
+    
+    for sensor_col in sensor_cols:
+        orig_std = baseline_std[sensor_col]
+        
+        # Jika sensor konstan/mati (std = 0), lewati agar tidak merusak data konstannya
+        if orig_std == 0:
+            continue
+            
+        # Skala standar deviasi dinamis: proporsional terhadap karakteristik sensor itu sendiri
+        dynamic_std = noise_factor * orig_std * time_factor
+        
         noise = np.random.normal(
             loc=0.0,
-            scale=noise_scale * df["time_cycles"],
+            scale=dynamic_std,
             size=len(df)
         )
         df[sensor_col] += noise
 
-    logger.info(
-        "Injecting linear scalar drift into %s (scale=%s)...",
-        drift_sensors,
-        drift_scale
-    )
-    # Apply linear drift: value = value + (drift_scale * time_cycles)
-    drift = drift_scale * df["time_cycles"]
+    logger.info("Injecting realistic scaled linear drift into %s...", drift_sensors)
+    # Drift juga disesuaikan dengan skala nilai masing-masing sensor terpilih
     for sensor_col in drift_sensors:
         if sensor_col in df.columns:
+            orig_std = baseline_std[sensor_col]
+            if orig_std == 0:
+                orig_std = 1.0 # Fallback jika sensor bernilai konstan tapi ingin di-drift
+                
+            # Nilai drift bergeser secara linear berdasarkan standar deviasi sensor
+            drift = drift_factor * orig_std * df["time_cycles"]
             df[sensor_col] += drift
         else:
             logger.warning("Sensor %s not found in dataframe.", sensor_col)
 
-    logger.info("Saving drifted data to %s...", output_path)
-    # Maintain original format: space-separated, no headers, no index.
+    logger.info("Saving realistic drifted data to %s...", output_path)
     df.to_csv(output_path, sep=" ", header=False, index=False)
-    logger.info("Drift data generation complete.")
+    logger.info("Realistic drift data generation complete.")
 
 
 if __name__ == "__main__":
-    generate_drift_data()
+    generate_drift_data_realistic()

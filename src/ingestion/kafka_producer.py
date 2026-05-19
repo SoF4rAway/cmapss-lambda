@@ -23,6 +23,7 @@ Usage:
     python -m src.ingestion.kafka_producer
 """
 
+import argparse
 import json
 import logging
 import time
@@ -298,11 +299,33 @@ def stream_telemetry(
 
 def main() -> None:
     """Wire up and run the telemetry producer pipeline."""
+    parser = argparse.ArgumentParser(
+        description="Real-time telemetry simulator for the C-MAPSS Lambda Architecture."
+    )
+    parser.add_argument(
+        "-d",
+        "--data-file",
+        type=str,
+        default=str(DATA_FILE_PATH.relative_to(PROJECT_ROOT)),
+        help="Path to the C-MAPSS data file, relative to the project root.",
+    )
+    args = parser.parse_args()
+
+    # Resolve relative to project root. Handles absolute paths natively.
+    data_path = (PROJECT_ROOT / args.data_file).resolve()
+
     producer: KafkaProducer | None = None
 
     try:
+        # Pre-flight check: raise FileNotFoundError before connecting to Kafka broker
+        if not data_path.is_file():
+            raise FileNotFoundError(
+                f"Data file not found: {data_path}\n"
+                "Verify the path relative to the project root."
+            )
+
         producer = create_producer()
-        stream_telemetry(producer)
+        stream_telemetry(producer, data_path=data_path)
     except FileNotFoundError as exc:
         logger.error("Data error: %s", exc)
     except RuntimeError as exc:
