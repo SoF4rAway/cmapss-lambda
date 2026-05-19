@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `python -m src.batch.batch_retrain`
-*   **Last Completed Task:** Implemented the Batch Layer Retraining Pipeline (`src/batch/batch_retrain.py`) that loads historical streaming telemetry from HDFS, combines it with baseline data, refits scaler parameters, loads the correct model architecture using dynamically loaded hyperparameters, fine-tunes the PyTorch model, and exports dual artifacts.
-*   **Current Active Task:** Verifying the execution and compatibility of the batch retraining script.
+*   **Last Shell Command:** `conda run -n pytorch-gpu env PYTHONPATH=. python -m src.batch.batch_retrain`
+*   **Last Completed Task:** Refactored `batch_retrain.py` to implement source-based sample weighting (1.0 for baseline, 0.3 for HDFS data) and locked the `StandardScaler` to baseline model statistics by loading it in Transform Mode. Adapted the PyTorch dataset loaders and `asymmetric_loss` to support element-wise sample weights while preserving backward compatibility with `tuner.py`. Verified functionality via test scripts.
+*   **Current Active Task:** None. Completed continuous learning training stability refactoring.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Run a full test of the batch retrain pipeline and verify the versioned output directory is created successfully.
+*   **Next Planned Step:** Await further tasks from the user.

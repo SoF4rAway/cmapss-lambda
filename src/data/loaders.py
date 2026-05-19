@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from src.core.config import seed_worker
 
 class CMAPSSTrainDataset(Dataset):
@@ -13,18 +13,39 @@ class CMAPSSTrainDataset(Dataset):
     hardcoded guessing logic and ensure the schema is deterministic across
     train, validation, and test pipelines.
     """
-    def __init__(self, df: pd.DataFrame, feature_cols: List[str], sequence_length: int = 30):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        sequence_length: int = 30,
+        weights: Optional[np.ndarray] = None,
+        return_weights: bool = False
+    ):
         self.sequence_length = sequence_length
         self.feature_cols = feature_cols
-        self.features, self.labels = self._prepare_sequences(df)
+        self.return_weights = return_weights
 
-    def _prepare_sequences(self, df: pd.DataFrame) -> Tuple[torch.Tensor, torch.Tensor]:
+        df_copy = df.copy()
+        has_weights = weights is not None
+        if has_weights:
+            df_copy["_temp_weight"] = np.array(weights)
+
+        self.features, self.labels, extracted_weights = self._prepare_sequences(df_copy, has_weights)
+
+        if has_weights:
+            self.weights = torch.tensor(np.array(extracted_weights), dtype=torch.float32).reshape(-1, 1)
+        else:
+            self.weights = torch.ones_like(self.labels)
+
+    def _prepare_sequences(self, df: pd.DataFrame, has_weights: bool = False) -> Tuple[torch.Tensor, torch.Tensor, Optional[List[float]]]:
         all_features = []
         all_labels = []
+        all_weights = []
 
         for unit_id, group in df.groupby("unit_id"):
             group_data = group[self.feature_cols].values
             group_labels = group["rul"].values
+            group_weights = group["_temp_weight"].values if has_weights else None
             num_rows = len(group_data)
             if num_rows < self.sequence_length:
                 continue
@@ -33,14 +54,20 @@ class CMAPSSTrainDataset(Dataset):
                 label = group_labels[i + self.sequence_length - 1]
                 all_features.append(window)
                 all_labels.append(label)
+                if has_weights:
+                    all_weights.append(group_weights[i + self.sequence_length - 1])
 
-        return torch.tensor(np.array(all_features), dtype=torch.float32), \
-               torch.tensor(np.array(all_labels), dtype=torch.float32).reshape(-1, 1)
+        features = torch.tensor(np.array(all_features), dtype=torch.float32)
+        labels = torch.tensor(np.array(all_labels), dtype=torch.float32).reshape(-1, 1)
+        
+        return features, labels, (all_weights if has_weights else None)
 
     def __len__(self):
         return len(self.features)
 
     def __getitem__(self, idx):
+        if self.return_weights:
+            return self.features[idx], self.labels[idx], self.weights[idx]
         return self.features[idx], self.labels[idx]
 
 class CMAPSSTestDataset(Dataset):
@@ -51,21 +78,42 @@ class CMAPSSTestDataset(Dataset):
     Feature columns are passed explicitly via feature_cols to ensure strict
     alignment with the training schema.
     """
-    def __init__(self, df: pd.DataFrame, feature_cols: List[str], sequence_length: int = 30):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        sequence_length: int = 30,
+        weights: Optional[np.ndarray] = None,
+        return_weights: bool = False
+    ):
         self.sequence_length = sequence_length
         self.feature_cols = feature_cols
-        self.features, self.labels = self._prepare_sequences(df)
+        self.return_weights = return_weights
 
-    def _prepare_sequences(self, df: pd.DataFrame) -> Tuple[torch.Tensor, torch.Tensor]:
+        df_copy = df.copy()
+        has_weights = weights is not None
+        if has_weights:
+            df_copy["_temp_weight"] = np.array(weights)
+
+        self.features, self.labels, extracted_weights = self._prepare_sequences(df_copy, has_weights)
+
+        if has_weights:
+            self.weights = torch.tensor(np.array(extracted_weights), dtype=torch.float32).reshape(-1, 1)
+        else:
+            self.weights = torch.ones_like(self.labels)
+
+    def _prepare_sequences(self, df: pd.DataFrame, has_weights: bool = False) -> Tuple[torch.Tensor, torch.Tensor, Optional[List[float]]]:
         num_features = len(self.feature_cols)
         all_features = []
         all_labels = []
+        all_weights = []
         unit_ids = df["unit_id"].unique()
 
         for unit_id in unit_ids:
             group = df[df["unit_id"] == unit_id]
             group_data = group[self.feature_cols].values
             group_labels = group["rul"].values
+            group_weights = group["_temp_weight"].values if has_weights else None
             num_rows = len(group_data)
 
             if num_rows >= self.sequence_length:
@@ -78,14 +126,20 @@ class CMAPSSTestDataset(Dataset):
             label = group_labels[-1]
             all_features.append(window)
             all_labels.append(label)
+            if has_weights:
+                all_weights.append(group_weights[-1])
 
-        return torch.tensor(np.array(all_features), dtype=torch.float32), \
-               torch.tensor(np.array(all_labels), dtype=torch.float32).reshape(-1, 1)
+        features = torch.tensor(np.array(all_features), dtype=torch.float32)
+        labels = torch.tensor(np.array(all_labels), dtype=torch.float32).reshape(-1, 1)
+        
+        return features, labels, (all_weights if has_weights else None)
 
     def __len__(self):
         return len(self.features)
 
     def __getitem__(self, idx):
+        if self.return_weights:
+            return self.features[idx], self.labels[idx], self.weights[idx]
         return self.features[idx], self.labels[idx]
 
 def get_dataloaders(
@@ -95,24 +149,24 @@ def get_dataloaders(
     feature_cols: List[str],
     sequence_length: int = 30,
     batch_size: int = 64,
-    seed: int = 42
+    seed: int = 42,
+    train_weights: Optional[np.ndarray] = None,
+    val_weights: Optional[np.ndarray] = None,
+    test_weights: Optional[np.ndarray] = None,
+    return_weights: bool = False
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Wrapper function to create PyTorch DataLoaders with reproducibility constraints.
-
-    Args:
-        train_df: Scaled training DataFrame.
-        val_df: Scaled validation DataFrame.
-        test_df: Scaled test DataFrame.
-        feature_cols: Explicit, deterministic list of active feature columns derived
-                      from CMAPSSPreprocessor.active_features.
-        sequence_length: Sliding window size.
-        batch_size: Batch size for all loaders.
-        seed: Global seed for the torch Generator.
     """
-    train_ds = CMAPSSTrainDataset(train_df, feature_cols, sequence_length)
-    val_ds = CMAPSSTrainDataset(val_df, feature_cols, sequence_length)
-    test_ds = CMAPSSTestDataset(test_df, feature_cols, sequence_length)
+    train_ds = CMAPSSTrainDataset(
+        train_df, feature_cols, sequence_length, weights=train_weights, return_weights=return_weights
+    )
+    val_ds = CMAPSSTrainDataset(
+        val_df, feature_cols, sequence_length, weights=val_weights, return_weights=return_weights
+    )
+    test_ds = CMAPSSTestDataset(
+        test_df, feature_cols, sequence_length, weights=test_weights, return_weights=return_weights
+    )
 
     g = torch.Generator()
     g.manual_seed(seed)
