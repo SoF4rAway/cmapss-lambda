@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `conda run -n pytorch-gpu env PYTHONPATH=. python -m src.batch.batch_retrain`
-*   **Last Completed Task:** Refactored `batch_retrain.py` to implement source-based sample weighting (1.0 for baseline, 0.3 for HDFS data) and locked the `StandardScaler` to baseline model statistics by loading it in Transform Mode. Adapted the PyTorch dataset loaders and `asymmetric_loss` to support element-wise sample weights while preserving backward compatibility with `tuner.py`. Verified functionality via test scripts.
-*   **Current Active Task:** None. Completed continuous learning training stability refactoring.
+*   **Last Shell Command:** `python -m py_compile src/streaming/speed_layer.py`
+*   **Last Completed Task:** Implemented a Multi-Index Strategy in `speed_layer.py` by supporting the `--es-index` argument and using `functools.partial` to dynamically pass the target index to `foreachBatch`. Created Elasticsearch alias initialization (`init_alias.sh`) and swap (`swap_alias.sh`) scripts to atomically map Kibana Dashboards via `cmapss_predictions_current`.
+*   **Current Active Task:** Pipeline validation prep and documenting commands.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Await further tasks from the user.
+*   **Next Planned Step:** Create walkthrough.md and present commands to the user.

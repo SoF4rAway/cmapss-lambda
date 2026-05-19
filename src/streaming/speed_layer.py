@@ -22,6 +22,7 @@ import pickle
 import threading
 import argparse
 import logging
+import functools
 import numpy as np
 import pandas as pd
 import joblib
@@ -199,7 +200,7 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
 # Sinks
 # ---------------------------------------------------------------------------
 
-def write_to_sinks(batch_df: DataFrame, batch_id: int) -> None:
+def write_to_sinks(batch_df: DataFrame, batch_id: int, es_index: str) -> None:
     """
     Directs each micro-batch to both the real-time (Elasticsearch) and the
     historical (HDFS Parquet) layers using multi-threading.
@@ -224,7 +225,7 @@ def write_to_sinks(batch_df: DataFrame, batch_id: int) -> None:
                 .option("es.port", "9200") \
                 .option("es.nodes.wan.only", "true") \
                 .option("es.index.auto.create", "true") \
-                .option("es.resource", "cmapss_predictions") \
+                .option("es.resource", es_index) \
                 .option("es.mapping.id", "doc_id") \
                 .option("es.write.operation", "upsert") \
                 .mode("append") \
@@ -281,6 +282,11 @@ def main() -> None:
         "--checkpoint-dir",
         default="/tmp/spark_checkpoints/speed_layer",
         help="Spark checkpoint directory",
+    )
+    parser.add_argument(
+        "--es-index",
+        default="cmapss_predictions",
+        help="Target Elasticsearch index for predictions",
     )
     args = parser.parse_args()
 
@@ -393,7 +399,7 @@ def main() -> None:
     logger.info("Starting streaming query...")
     query = (
         predictions_df.writeStream
-        .foreachBatch(write_to_sinks)
+        .foreachBatch(functools.partial(write_to_sinks, es_index=args.es_index))
         .outputMode("update")
         .option("checkpointLocation", args.checkpoint_dir)
         .trigger(processingTime="5 seconds")
