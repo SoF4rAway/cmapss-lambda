@@ -21,9 +21,9 @@ A high-performance Big Data system for real-time Remaining Useful Life (RUL) pre
 
 | Metric | Target | Current Baseline |
 | :--- | :--- | :--- |
-| **RMSE** | < 20.0 | **15.3680** |
-| **NASA Score** | < 500 | **308.66** |
-| **Inference Latency** | < 0.1 ms | **0.0381 ms** |
+| **RMSE** | < 20.0 | **15.5561** |
+| **NASA Score** | < 500 | **355.02** |
+| **Inference Latency** | < 0.1 ms | **0.0397 ms** |
 | **Model Size** | < 500 KB | **22.14 KB** |
 
 ## 📂 Project Structure
