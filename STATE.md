@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `python -m src.ingestion.generate_drift_data`
-*   **Last Completed Task:** Implemented `src/ingestion/generate_drift_data.py` to programmatically inject Gaussian noise and linear scalar drift into C-MAPSS telemetry data for Lambda architecture validation. Generated `data/CMAPSSData/test_FD001_drifted.txt`.
-*   **Current Active Task:** Monitoring the integration of drifted data into the Kafka ingestion pipeline.
+*   **Last Shell Command:** `python -m src.batch.batch_retrain`
+*   **Last Completed Task:** Implemented the Batch Layer Retraining Pipeline (`src/batch/batch_retrain.py`) that loads historical streaming telemetry from HDFS, combines it with baseline data, refits scaler parameters, loads the correct model architecture using dynamically loaded hyperparameters, fine-tunes the PyTorch model, and exports dual artifacts.
+*   **Current Active Task:** Verifying the execution and compatibility of the batch retraining script.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Validate the Spark Speed Layer's resilience against the newly generated data drift.
+*   **Next Planned Step:** Run a full test of the batch retrain pipeline and verify the versioned output directory is created successfully.

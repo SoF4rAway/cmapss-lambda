@@ -753,6 +753,13 @@ def finalize_model(
     export_to_onnx(export_model, model_save_path, input_shape=(1, 30, input_channels))
     logger.info(f"Exported ONNX model to '{model_save_path}'.")
 
+    # 3. Hyperparameter Export
+    hparams_save_path = os.path.join(save_dir, "hyperparameters.json")
+    with open(hparams_save_path, "w") as f:
+        import json
+        json.dump(best_params, f, indent=4)
+    logger.info(f"Exported hyperparameters to '{hparams_save_path}'.")
+
     preprocessor.save_artifacts(save_dir)
 
     # Export Pareto front visualisation into the same versioned directory.
