@@ -20,6 +20,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.pytest_cache/
 
 # --- Environments ---
 .env
@@ -56,6 +57,8 @@ results/
 *.pt
 *.pth
 *.h5
+*.onnx
+*.joblib
 
 # Logs and training runs
 runs/
