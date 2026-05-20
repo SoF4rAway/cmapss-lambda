@@ -21,6 +21,7 @@ wheels/
 *.egg
 MANIFEST
 .pytest_cache/
+.agents/
 
 # --- Environments ---
 .env
