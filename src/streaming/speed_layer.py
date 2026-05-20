@@ -76,9 +76,9 @@ def get_onnx_session(onnx_bytes: bytes) -> ort.InferenceSession:
 # Stateful UDF Factory
 # ---------------------------------------------------------------------------
 
-def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
+def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx, bc_model_version):
     """
-    Returns a stateful Pandas UDF that closes over the three broadcast
+    Returns a stateful Pandas UDF that closes over the broadcast
     handles. Building the UDF inside main() — after the broadcast variables
     are created — is the correct pattern: Python closures capture the *value*
     of bc_* at definition time, and Spark serializes the closure (including
@@ -98,7 +98,7 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
             state.remove()
             # yield an empty DataFrame to satisfy the iterator contract, then stop
             yield pd.DataFrame(
-                columns=["unit_id", "time_cycles", "predicted_rul", "is_critical"]
+                columns=["unit_id", "time_cycles", "predicted_rul", "is_critical", "inference_latency_ms", "model_version"]
             )
             return
 
@@ -147,7 +147,8 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
             history_df[active_features] = history_df[active_features].astype(np.float32)
             scaled_all = scaler.transform(history_df[active_features])
 
-            # 4. Sliding Window Inference for each NEW row
+            # 4. Sliding Window Preprocessing (Collect inputs for batch ONNX)
+            batch_tensors = []
             for i in range(total_rows - num_new_rows, total_rows):
                 window_start = max(0, i + 1 - 30)
                 window_end = i + 1
@@ -164,25 +165,40 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
                     tensor_input = window_features
 
                 # Reshape to (1, 30, num_features)
-                tensor_input = tensor_input.reshape(
-                    1, 30, len(active_features)
-                ).astype(np.float32)
+                tensor_input = tensor_input.reshape(1, 30, len(active_features)).astype(np.float32)
+                batch_tensors.append(tensor_input)
 
-                # Inference
-                raw_output = session.run(None, {input_name: tensor_input})[0][0][0]
-                predicted_rul = float(np.clip(raw_output, 0.0, 125.0))
+            if batch_tensors:
+                # Stack all sliding windows into shape (num_new_rows, 30, num_features)
+                batch_array = np.vstack(batch_tensors)
 
-                # Explicit Dtype Control via .item()
-                cycle = history_df.iloc[i]["time_cycles"].item()
+                # Time the vectorized ONNX execution
+                import time
+                t0 = time.perf_counter()
+                raw_outputs = session.run(None, {input_name: batch_array})[0]
+                t1 = time.perf_counter()
 
-                results.append(
-                    {
-                        "unit_id": int(key[0]),
-                        "time_cycles": int(cycle),
-                        "predicted_rul": predicted_rul,
-                        "is_critical": bool(predicted_rul < 30.0),
-                    }
-                )
+                # Calculate per-record latency in milliseconds
+                latency_ms = ((t1 - t0) * 1000.0) / num_new_rows
+
+                # Process results
+                for idx, i in enumerate(range(total_rows - num_new_rows, total_rows)):
+                    raw_output = raw_outputs[idx][0]
+                    predicted_rul = float(np.clip(raw_output, 0.0, 125.0))
+
+                    # Explicit Dtype Control via .item()
+                    cycle = history_df.iloc[i]["time_cycles"].item()
+
+                    results.append(
+                        {
+                            "unit_id": int(key[0]),
+                            "time_cycles": int(cycle),
+                            "predicted_rul": predicted_rul,
+                            "is_critical": bool(predicted_rul < 30.0),
+                            "inference_latency_ms": float(latency_ms),
+                            "model_version": str(bc_model_version.value),
+                        }
+                    )
 
         # ----------------------------------------------------------------
         # 8. Persist updated history (last 30 cycles) and set 1-hour TTL
@@ -191,7 +207,10 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx):
         state.update((pickle.dumps(history_df, protocol=5),))
         state.setTimeoutDuration(60 * 60 * 1000)
 
-        yield pd.DataFrame(results)
+        yield pd.DataFrame(
+            results,
+            columns=["unit_id", "time_cycles", "predicted_rul", "is_critical", "inference_latency_ms", "model_version"]
+        )
 
     return predict_rul_with_state
 
@@ -306,7 +325,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 1. Load and broadcast artifacts
     # ------------------------------------------------------------------
-    logger.info("Loading artifacts from: %s", args.model_dir)
+    model_version_str = os.path.basename(os.path.normpath(args.model_dir))
+    logger.info("Loading artifacts from: %s (Version: %s)", args.model_dir, model_version_str)
 
     with open(os.path.join(args.model_dir, "feature_schema.json"), "r") as fh:
         active_features = json.load(fh)["active_features"]
@@ -321,6 +341,7 @@ def main() -> None:
     bc_schema = spark.sparkContext.broadcast(active_features)
     bc_scaler = spark.sparkContext.broadcast(scaler)
     bc_onnx = spark.sparkContext.broadcast(model_bytes)
+    bc_model_version = spark.sparkContext.broadcast(model_version_str)
 
     # ------------------------------------------------------------------
     # 2. Define schemas
@@ -342,6 +363,8 @@ def main() -> None:
             StructField("time_cycles", IntegerType(), False),
             StructField("predicted_rul", FloatType(), False),
             StructField("is_critical", BooleanType(), False),
+            StructField("inference_latency_ms", FloatType(), False),
+            StructField("model_version", StringType(), False),
         ]
     )
 
@@ -377,7 +400,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 5. Apply stateful inference via the closure-based UDF
     # ------------------------------------------------------------------
-    predict_udf = make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx)
+    predict_udf = make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx, bc_model_version)
 
     predictions_df = parsed_df.groupBy("unit_id").applyInPandasWithState(
         func=predict_udf,

@@ -19,8 +19,8 @@ priority: 2 (Dynamic Context)
 * **Kibana UI:** `http://localhost:5601`
 
 ## 3. Current State
-*   **Last Shell Command:** `python -m py_compile src/streaming/speed_layer.py`
-*   **Last Completed Task:** Implemented a Multi-Index Strategy in `speed_layer.py` by supporting the `--es-index` argument and using `functools.partial` to dynamically pass the target index to `foreachBatch`. Created Elasticsearch alias initialization (`init_alias.sh`) and swap (`swap_alias.sh`) scripts to atomically map Kibana Dashboards via `cmapss_predictions_current`.
-*   **Current Active Task:** Pipeline validation prep and documenting commands.
+*   **Last Shell Command:** `PYTHONPATH=. python evaluate.py --model-version 20260517_135031 --no-prod-latency`
+*   **Last Completed Task:** Added model version selection to `evaluate.py`/`evaluator.py`, integrated Option A fallback (local synthetic baseline), fixed a potential data leakage issue in the evaluator, and updated `speed_layer.py` to tag predictions with their generating `model_version` in Elasticsearch.
+*   **Current Active Task:** Complete execution and walkthrough presentation.
 *   **Known Blockers/Issues:** None.
-*   **Next Planned Step:** Create walkthrough.md and present commands to the user.
+*   **Next Planned Step:** Share results with the user.
