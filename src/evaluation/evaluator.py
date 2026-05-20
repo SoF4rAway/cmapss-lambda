@@ -35,13 +35,22 @@ def benchmark_inference(onnx_path: str, input_shape: tuple, n_runs: int = 1000) 
     throughput = n_runs / (end_time - start_time)  # samples/sec
     return avg_latency, throughput
 
-def get_latest_model(models_dir: str = MODELS_DIR) -> Tuple[str, str]:
+def get_model(model_timestamp: str = None, models_dir: str = MODELS_DIR) -> Tuple[str, str]:
     """
     Scan versioned subdirectories (models/{timestamp}/) for model.onnx.
-    Returns the path to the latest model.onnx and its parent directory.
+    If model_timestamp is specified, attempts to find that specific model.
+    Otherwise, returns the path to the latest model.onnx and its parent directory.
     """
     if not os.path.exists(models_dir):
         return None, None
+        
+    if model_timestamp:
+        candidate_dir = os.path.join(models_dir, model_timestamp)
+        candidate = os.path.join(candidate_dir, "model.onnx")
+        if os.path.exists(candidate):
+            return candidate, candidate_dir
+        logger.warning(f"Requested model version {model_timestamp} not found. Falling back to latest.")
+
     # Versioned dirs are named as timestamps (YYYYMMDD_HHMMSS), sort lexicographically
     version_dirs = sorted([
         d for d in os.listdir(models_dir)
@@ -53,16 +62,15 @@ def get_latest_model(models_dir: str = MODELS_DIR) -> Tuple[str, str]:
             return candidate, os.path.join(models_dir, version_dir)
     return None, None
 
-def run_evaluation_pipeline():
+def run_evaluation_pipeline(model_timestamp: str = None, fetch_prod_latency: bool = True) -> None:
     # 1. Setup paths
     CMAPSS_DATA_DIR = os.path.join(DATA_DIR, "CMAPSSData")
     test_path = os.path.join(CMAPSS_DATA_DIR, "test_FD001.txt")
     rul_path = os.path.join(CMAPSS_DATA_DIR, "RUL_FD001.txt")
-    train_path = os.path.join(CMAPSS_DATA_DIR, "train_FD001.txt")
     
-    onnx_model_path, model_artifact_dir = get_latest_model()
+    onnx_model_path, model_artifact_dir = get_model(model_timestamp=model_timestamp)
     if not onnx_model_path or not os.path.exists(onnx_model_path):
-        logger.error("No ONNX models found in versioned subdirectories of: {MODELS_DIR}")
+        logger.error(f"No ONNX models found in versioned subdirectories of: {MODELS_DIR}")
         return
 
     # Timestamp is the versioned directory name (e.g. 20260419_215233)
@@ -73,12 +81,8 @@ def run_evaluation_pipeline():
     
     logger.info(f"Evaluating model: {onnx_model_path}")
 
-    # 2. Data Loading
-    preprocessor = CMAPSSPreprocessor(max_rul=125)
-    raw_train = preprocessor.load_data(train_path)
-    raw_train = preprocessor.add_piecewise_rul(raw_train)
-    train_set, _ = preprocessor.split_train_val_by_engine(raw_train, val_ratio=0.2, seed=42)
-    _ = preprocessor.fit_transform(train_set)
+    # 2. Data Loading (Transform Mode: load pre-fitted scaler & schema from artifact directory)
+    preprocessor = CMAPSSPreprocessor(max_rul=125, artifact_dir=model_artifact_dir)
     
     test_labeled = preprocessor.load_and_label_test_data(test_path, rul_path)
     test_scaled = preprocessor.transform(test_labeled)
@@ -103,6 +107,16 @@ def run_evaluation_pipeline():
     avg_latency, throughput = benchmark_inference(onnx_model_path, input_shape)
     model_size_kb = os.path.getsize(onnx_model_path) / 1024
     
+    # Fetch Elasticsearch production latency (Option A fallback)
+    if fetch_prod_latency:
+        production_latency = fetch_es_latency(model_version=timestamp)
+        if production_latency is not None:
+            prod_latency_str = f"{production_latency:.4f} ms"
+        else:
+            prod_latency_str = "N/A (Using Synthetic Baseline)"
+    else:
+        prod_latency_str = "N/A (Using Synthetic Baseline)"
+
     # 5. Visualizations
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -137,7 +151,8 @@ PREDICTIVE ACCURACY (NASA C-MAPSS FD001 Test Set)
 --------------------------------------------------------------------------------
 DEPLOYMENT CHARACTERISTICS
 --------------------------------------------------------------------------------
-- Latency: {avg_latency:.4f} ms
+- Synthetic Latency: {avg_latency:.4f} ms
+- Production Global Latency: {prod_latency_str}
 - Model Size: {model_size_kb:.2f} KB
 --------------------------------------------------------------------------------
 BIAS & ERROR DISTRIBUTION
@@ -153,6 +168,41 @@ BIAS & ERROR DISTRIBUTION
     print(report)
     logger.info(f"Results saved to {run_results_dir}")
 
+def fetch_es_latency(
+    index: str = "cmapss_predictions_v2",
+    es_url: str = "http://localhost:9200",
+    model_version: str = None
+) -> float:
+    """Fetches the average inference latency from Elasticsearch index, optionally filtered by model version."""
+    query = {
+        "size": 0,
+        "aggs": {
+            "avg_latency": {
+                "avg": {
+                    "field": "inference_latency_ms"
+                }
+            }
+        }
+    }
+    if model_version:
+        query["query"] = {
+            "term": {
+                "model_version.keyword": model_version
+            }
+        }
+    try:
+        import requests
+        response = requests.post(f"{es_url}/{index}/_search", json=query, timeout=5)
+        if response.status_code == 200:
+            res_json = response.json()
+            avg_val = res_json.get("aggregations", {}).get("avg_latency", {}).get("value")
+            if avg_val is not None:
+                return float(avg_val)
+    except Exception as e:
+        logger.warning(f"Failed to fetch production latency from Elasticsearch: {e}")
+    return None
+
 if __name__ == "__main__":
     set_seed(42)
     run_evaluation_pipeline()
+
