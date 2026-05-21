@@ -432,7 +432,7 @@ def main() -> None:
             timestamp_folder = time.strftime("%Y%m%d_%H%M%S")
             report_dir = os.path.join(RESULTS_DIR, timestamp_folder)
             os.makedirs(report_dir, exist_ok=True)
-            report_path = os.path.join(report_dir, "report.md")
+            report_path = os.path.join(report_dir, "fault_tolerance.md")
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(f"""
 ## Test Name: Fault Tolerance / Worker Node Failure
