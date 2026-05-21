@@ -17,14 +17,25 @@ A high-performance Big Data system for real-time Remaining Useful Life (RUL) pre
 3.  **Batch Layer**: Telemetry and predictions are archived to **HDFS (Parquet)** for historical analysis and retraining.
 4.  **Serving Layer**: **Elasticsearch + Kibana** provides real-time health monitoring and critical RUL alerts.
 
-## 📊 Performance Benchmarks
+## 📊 Performance Benchmarks & Audit Results
 
-| Metric | Target | Current Baseline |
-| :--- | :--- | :--- |
-| **RMSE** | < 20.0 | **15.5561** |
-| **NASA Score** | < 500 | **355.02** |
-| **Inference Latency** | < 0.1 ms | **0.0397 ms** |
-| **Model Size** | < 500 KB | **22.14 KB** |
+The system's machine learning components and real-time streaming pipeline are validated by running a consolidated performance audit comparing the baseline and retrained model configurations:
+
+| Metric / Check | Target / Limit | Baseline (V1) | Retrained (V2) | Change / Delta | Status |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **Model Version** | - | `20260517_145257` | `v2_drift_corrected/20260521_230324` | - | - |
+| **Model RMSE** | < 20.0 | **15.5561** | **16.1975** | `+0.6415` | WARNING (Degraded) |
+| **NASA Asymmetric Score** | < 500.0 | **355.02** | **337.25** | `-17.77 (-5.00%)` | PASS |
+| **5% Retrain Circuit Breaker** | - | - | Limit: `<= 372.77` | - | **PASSED** |
+| **Inference Latency (Synthetic)** | < 0.1 ms | **0.0375 ms** | **0.0780 ms** | `+0.0405 ms` | PASS |
+| **Inference Latency (Production)** | < 0.1 ms | **0.0129 ms** | **0.0133 ms** | `+0.0004 ms` | PASS |
+| **Model Size** | < 500 KB | **22.14 KB** | **22.14 KB** | `+0.00 KB` | PASS |
+| **Speed Layer Throughput** | - | - | **103.78 EPS** | - | PASS |
+| **End-to-End Latency (5s Trigger)**| < 6.0 s | - | **4.4165 s** | - | PASS |
+
+> [!TIP]
+> **Operational Analysis:** Although the retrained model (V2) exhibits a slightly higher average error (RMSE), it has a significantly better NASA Asymmetric Score. This indicates that V2's errors are skewed conservative (underestimating remaining useful life), which dramatically reduces operational failure risk and safely passes the 5% circuit breaker safety check.
+
 
 ## 📂 Project Structure
 
@@ -41,9 +52,10 @@ cmapss-lambda/
 ├── models/                    # Versioned Artifact Bundles
 ├── results/                   # Timestamped evaluation reports
 ├── data/                      # Raw C-MAPSS dataset (FD001, etc.)
-├── preprocess.py              # Entry: Data Pipeline
-├── tune.py                    # Entry: Training Pipeline (NAS)
-└── evaluate.py                # Entry: Evaluation Pipeline
+    # (Entry scripts removed; use module execution)
+    # preprocess.py – removed
+    # tune.py – removed
+    # evaluate.py – removed
 ```
 
 ## 🛠 Getting Started
