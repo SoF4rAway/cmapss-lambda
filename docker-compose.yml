@@ -6,6 +6,7 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_4LW_COMMANDS_WHITELIST: ruok,srvr,stat,mntr
+      ZOOKEEPER_ADMIN_ENABLE_SERVER: "true"
     networks:
       - lambda_net
     deploy:
@@ -16,7 +17,7 @@ services:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_log:/var/lib/zookeeper/log
     healthcheck:
-      test: [ "CMD", "curl", "-sf", "http://localhost:8080/commands/ruok" ]
+      test: ["CMD-SHELL", "echo ruok | bash -c 'cat > /dev/tcp/localhost/2181' && exit 0 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -56,6 +57,7 @@ services:
   kafka-setup:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka-setup
+    restart: on-failure
     depends_on:
       kafka:
         condition: service_healthy
@@ -117,6 +119,12 @@ services:
           memory: 1.5G
     volumes:
       - hadoop_datanode:/hadoop/dfs/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9864" ]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   spark-master:
     build:
@@ -148,6 +156,7 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
+      - spark_checkpoints:/tmp/spark_checkpoints
     healthcheck:
       test: [ "CMD", "/opt/bitnami/python/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080')" ]
       interval: 15s
@@ -161,6 +170,7 @@ services:
       dockerfile: Dockerfile.spark
     image: custom-spark:3.5.0
     container_name: spark-worker
+    restart: always
     depends_on:
       spark-master:
         condition: service_healthy
@@ -185,6 +195,13 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
+      - spark_checkpoints:/tmp/spark_checkpoints
+    healthcheck:
+      test: [ "CMD", "/opt/bitnami/python/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081')" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
@@ -213,6 +230,7 @@ services:
   kibana:
     image: docker.elastic.co/kibana/kibana:8.10.2
     container_name: kibana
+    restart: always
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -238,3 +256,4 @@ volumes:
   hadoop_namenode:
   hadoop_datanode:
   elasticsearch_data:
+  spark_checkpoints:

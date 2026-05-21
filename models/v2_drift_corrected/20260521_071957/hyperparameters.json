@@ -1,0 +1,14 @@
+{
+    "num_blocks": 2,
+    "kernel_size": 7,
+    "dilation": 3,
+    "fc_units": 64,
+    "out_channels_b0": 16,
+    "use_bn_b0": false,
+    "dropout_b0": 0.1392951695159793,
+    "out_channels_b1": 16,
+    "use_bn_b1": true,
+    "dropout_b1": 0.000736911043155708,
+    "lr": 0.0056852051903320934,
+    "weight_decay": 0.0001668421790225709
+}

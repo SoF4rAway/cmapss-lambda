@@ -26,11 +26,11 @@ except ImportError:
     SparkSession = None
     HAS_PYSPARK = False
 
-from src.core.config import set_seed, DATA_DIR, MODELS_DIR
+from src.core.config import set_seed, DATA_DIR, MODELS_DIR, RESULTS_DIR
 from src.models.architecture import RUL_1D_CNN, export_to_onnx
-from src.data.loaders import get_dataloaders
+from src.data.loaders import get_dataloaders, CMAPSSTestDataset
 from src.data.preprocess import CMAPSSPreprocessor
-from src.training.utils import asymmetric_loss
+from src.training.utils import asymmetric_loss, nasa_asymmetric_score
 
 # Setup logger
 logging.basicConfig(
@@ -136,6 +136,106 @@ def load_hdfs_telemetry(spark: Optional[SparkSession], hdfs_path: str) -> Option
             except Exception as read_err:
                 logger.error(f"Failed to read local fallback CSV: {read_err}")
         return None
+
+
+def evaluate_on_golden_set(
+    model: nn.Module,
+    preprocessor: CMAPSSPreprocessor,
+    device: torch.device
+) -> Tuple[float, float]:
+    """
+    Evaluates a PyTorch model on the Golden Validation Set (test_FD001).
+    
+    This function processes test data strictly in Transform mode using the preprocessor's
+    configured feature schema and scaler to prevent any data leakage.
+
+    Args:
+        model: The model to evaluate.
+        preprocessor: Preprocessor initialized in Transform mode.
+        device: Torch device (cpu or cuda).
+
+    Returns:
+        A tuple containing (RMSE, NASA Asymmetric Score).
+    """
+    cmapss_data_dir = os.path.join(DATA_DIR, "CMAPSSData")
+    test_path = os.path.join(cmapss_data_dir, "test_FD001.txt")
+    rul_path = os.path.join(cmapss_data_dir, "RUL_FD001.txt")
+
+    test_labeled = preprocessor.load_and_label_test_data(test_path, rul_path)
+    test_scaled = preprocessor.transform(test_labeled)
+    feature_cols = preprocessor.active_features
+
+    test_ds = CMAPSSTestDataset(test_scaled, feature_cols=feature_cols, sequence_length=30)
+    test_loader = DataLoader(test_ds, batch_size=64, shuffle=False)
+
+    model.eval()
+    all_preds: List[np.ndarray] = []
+    all_targets: List[np.ndarray] = []
+
+    with torch.no_grad():
+        for x, y in test_loader:
+            x = x.to(device)
+            preds = model(x)
+            all_preds.append(preds.cpu().numpy())
+            all_targets.append(y.numpy())
+
+    y_pred = np.concatenate(all_preds).flatten()
+    y_true = np.concatenate(all_targets).flatten()
+
+    rmse = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
+    score = nasa_asymmetric_score(y_pred, y_true)
+
+    return rmse, score
+
+
+def save_circuit_breaker_report(
+    timestamp: str,
+    b_rmse: float,
+    b_score: float,
+    c_rmse: float,
+    c_score: float,
+    passed: bool
+) -> str:
+    """
+    Generates and saves the circuit breaker report to the results directory.
+
+    Args:
+        timestamp: Timestamp identification string for the run.
+        b_rmse: Baseline model RMSE on the golden set.
+        b_score: Baseline model Asymmetric Score on the golden set.
+        c_rmse: Candidate model RMSE on the golden set.
+        c_score: Candidate model Asymmetric Score on the golden set.
+        passed: Boolean indicating whether the circuit breaker passed.
+
+    Returns:
+        The path to the saved report.
+    """
+    run_results_dir = os.path.join(RESULTS_DIR, timestamp)
+    os.makedirs(run_results_dir, exist_ok=True)
+    report_path = os.path.join(run_results_dir, "report.md")
+
+    status = "PASSED" if passed else "FAILED (ABORTED)"
+    max_allowed_score = b_score * 1.05
+
+    report = f"""# Circuit Breaker Retraining Report: {timestamp}
+
+## Status: {status}
+
+## Validation Summary
+The circuit breaker verifies the candidate model against the Golden Validation Set (`test_FD001.txt`). Below are the performance metrics comparing the baseline (production) model and the newly retrained candidate model.
+
+| Model | RMSE (Target: < 30.0) | NASA Asymmetric Score (Target: <= {max_allowed_score:.2f}) |
+| :--- | :---: | :---: |
+| **Baseline (Production)** | {b_rmse:.4f} | {b_score:.2f} |
+| **Candidate (Retrained)** | {c_rmse:.4f} | {c_score:.2f} |
+
+## Conclusion
+{"The candidate model met all performance and safety constraints. Deploying retrained model." if passed else "The candidate model failed to meet the safety constraints. Deployment aborted; keeping the production model."}
+"""
+    with open(report_path, "w") as f:
+        f.write(report)
+    logger.info(f"Circuit breaker audit report saved to '{report_path}'.")
+    return report_path
 
 
 def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1e-2) -> str:
@@ -271,6 +371,11 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
     model.to(device)
     logger.info(f"Loaded pre-trained weights from {model_path} on {device}")
 
+    # 5.1 Baseline Freeze (Evaluate production model on Golden Validation Set)
+    logger.info("Evaluating baseline production model on Golden Validation Set...")
+    baseline_rmse, baseline_score = evaluate_on_golden_set(model, preprocessor, device)
+    logger.info(f"Baseline - RMSE: {baseline_rmse:.4f} | NASA Asymmetric Score: {baseline_score:.2f}")
+
     # 6. Warm-Start Retraining Loop
     # Use conservative optimization parameters to adapt to operational drift gently
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -313,8 +418,47 @@ def run_batch_retrain(epochs: int = 5, lr: float = 1e-4, weight_decay: float = 1
             f"Val Loss (asym): {val_epoch_loss:.4f}"
         )
 
-    # 7. Dual-Artifact Export & Deployment Preparation
+    # 6.1 Validation Gate / Circuit Breaker
+    logger.info("Evaluating candidate model on Golden Validation Set...")
+    candidate_rmse, candidate_score = evaluate_on_golden_set(model, preprocessor, device)
+    logger.info(f"Candidate - RMSE: {candidate_rmse:.4f} | NASA Asymmetric Score: {candidate_score:.2f}")
+
+    # Circuit Breaker Verification
+    passed = True
+    if candidate_rmse >= 30.0:
+        logger.warning(f"Constraint 1 Failed: Candidate RMSE ({candidate_rmse:.4f}) >= 30.0")
+        passed = False
+
+    max_allowed_score = baseline_score * 1.05
+    if candidate_score > max_allowed_score:
+        logger.warning(
+            f"Constraint 2 Failed: Candidate Asymmetric Score ({candidate_score:.2f}) "
+            f"exceeds baseline allowed threshold ({max_allowed_score:.2f})"
+        )
+        passed = False
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_circuit_breaker_report(
+        timestamp,
+        baseline_rmse,
+        baseline_score,
+        candidate_rmse,
+        candidate_score,
+        passed
+    )
+
+    if not passed:
+        logger.critical(
+            f"Circuit Breaker Triggered! Retraining process diverged. "
+            f"Aborting deployment for version {timestamp}. Production model maintained."
+        )
+        if spark is not None:
+            spark.stop()
+        return None
+
+    logger.info("Circuit Breaker passed. Proceeding with export...")
+
+    # 7. Dual-Artifact Export & Deployment Preparation
     save_dir = os.path.join(MODELS_DIR, "v2_drift_corrected", timestamp)
     os.makedirs(save_dir, exist_ok=True)
 

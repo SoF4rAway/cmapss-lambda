@@ -15,5 +15,7 @@ numpy
 # Serialization / Utilities
 python-dotenv
 
-# Streaming / Ingestion
+# Streaming / Ingestion / Testing
 kafka-python
+docker
+elasticsearch<9.0.0

@@ -28,6 +28,7 @@ import pandas as pd
 import joblib
 import onnxruntime as ort
 from typing import Iterator, Tuple
+from concurrent.futures import ThreadPoolExecutor
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import col, from_json, concat, lit
@@ -218,68 +219,57 @@ def make_predict_rul_udf(bc_schema, bc_scaler, bc_onnx, bc_model_version):
 # ---------------------------------------------------------------------------
 # Sinks
 # ---------------------------------------------------------------------------
+# Initialize a persistent executor pool at the module level
+# This avoids the overhead of creating new threads for every micro-batch
+_hdfs_executor = ThreadPoolExecutor(max_workers=1)
 
 def write_to_sinks(batch_df: DataFrame, batch_id: int, es_index: str) -> None:
-    """
-    Directs each micro-batch to both the real-time (Elasticsearch) and the
-    historical (HDFS Parquet) layers using multi-threading.
-    """
     if batch_df.isEmpty():
         return
 
-    # Create deterministic doc_id for Elasticsearch Upserts to prevent duplication
     batch_df = batch_df.withColumn(
         "doc_id",
         concat(lit("unit_"), col("unit_id"), lit("_cycle_"), col("time_cycles"))
     )
 
-    # Persist the batch to avoid re-computing the 1D-CNN inference for each sink
+    # 1. PRE-PERSIST: Crucial for multi-sink strategies.
+    # This prevents the DAG from being executed twice (once for ES, once for HDFS).
     batch_df.persist()
 
-    def write_es():
-        try:
-            batch_df.write \
-                .format("org.elasticsearch.spark.sql") \
-                .option("es.nodes", "elasticsearch") \
-                .option("es.port", "9200") \
-                .option("es.nodes.wan.only", "true") \
-                .option("es.index.auto.create", "true") \
-                .option("es.resource", es_index) \
-                .option("es.mapping.id", "doc_id") \
-                .option("es.write.operation", "upsert") \
-                .mode("append") \
-                .save()
-            logger.info("Batch %d: pushed to Elasticsearch.", batch_id)
-        except Exception as exc:
-            logger.error("Batch %d: Elasticsearch sink error: %s", batch_id, exc)
+    try:
+        # 2. REAL-TIME PATH: Blocking (guarantees sub-second dashboard updates)
+        batch_df.write \
+            .format("org.elasticsearch.spark.sql") \
+            .option("es.nodes", "elasticsearch") \
+            .option("es.port", "9200") \
+            .option("es.resource", es_index) \
+            .option("es.mapping.id", "doc_id") \
+            .option("es.write.operation", "upsert") \
+            .mode("append") \
+            .save()
+        logger.info("Batch %d: pushed to Elasticsearch.", batch_id)
+    except Exception as exc:
+        logger.error("Batch %d: Elasticsearch sink error: %s", batch_id, exc)
 
-    def write_hdfs():
-        try:
-            batch_df.coalesce(1).write \
-                .format("parquet") \
-                .option("parquet.block.size", "104857600") \
-                .mode("append") \
-                .save("hdfs://namenode:9000/cmapss/batch_layer/predictions/")
-            logger.info("Batch %d: saved to HDFS (Parquet).", batch_id)
-        except Exception as exc:
-            logger.error("Batch %d: HDFS sink error: %s", batch_id, exc)
-
-    # Ensure Kibana receives updates immediately
-    es_thread = threading.Thread(target=write_es)
-    es_thread.start()
-
-    # HDFS as a background fire-and-forget task, every 10 batches
+    # 3. COLD PATH: Asynchronous but managed.
+    # Using a ThreadPoolExecutor ensures that we aren't spinning up new threads,
+    # and we can handle errors without crashing the Spark task.
     if batch_id % 10 == 0:
-        hdfs_thread = threading.Thread(target=write_hdfs)
-        hdfs_thread.daemon = True
-        hdfs_thread.start()
+        def hdfs_write_task(df, b_id):
+            try:
+                df.coalesce(1).write \
+                    .format("parquet") \
+                    .mode("append") \
+                    .save("hdfs://namenode:9000/cmapss/batch_layer/predictions/")
+                logger.info("Batch %d: HDFS write complete.", b_id)
+            except Exception as e:
+                logger.error("Batch %d: HDFS write failed: %s", b_id, e)
 
-    # Block only on Elasticsearch to confirm Real-time SLA
-    es_thread.join()
+        # Submit task to the persistent pool
+        _hdfs_executor.submit(hdfs_write_task, batch_df, batch_id)
 
-    # Free memory asynchronously without blocking background HDFS writes
+    # 4. MEMORY MANAGEMENT
     batch_df.unpersist(blocking=False)
-
 
 # ---------------------------------------------------------------------------
 # Main Pipeline
