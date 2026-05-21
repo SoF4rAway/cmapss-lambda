@@ -53,10 +53,13 @@ Run the streaming speed layer pointing to the baseline model and the `v1` index.
 ```bash
 docker exec -it spark-master spark-submit \
   --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.elasticsearch:elasticsearch-spark-30_2.12:8.11.1 \
+  --conf spark.excludeOnFailure.enabled=false \
+  --conf "spark.driver.extraJavaOptions=-Duser.timezone=Asia/Jakarta" \
+  --conf "spark.executor.extraJavaOptions=-Duser.timezone=Asia/Jakarta" \
   /app/src/streaming/speed_layer.py \
   --model-dir /app/models/20260517_145257 \
   --es-index cmapss_predictions_v1 \
-  --checkpoint-dir /tmp/spark_checkpoints/speed_layer
+  --checkpoint-dir hdfs://namenode:9000/cmapss/checkpoints/speed_layer
 ```
 
 ### 2. Ingest Drifted Data

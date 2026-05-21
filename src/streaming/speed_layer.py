@@ -415,7 +415,7 @@ def main() -> None:
         .foreachBatch(functools.partial(write_to_sinks, es_index=args.es_index))
         .outputMode("update")
         .option("checkpointLocation", args.checkpoint_dir)
-        .trigger(processingTime="5 seconds")
+        .trigger(processingTime="3 seconds")
         .start()
     )
 

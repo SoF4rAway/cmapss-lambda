@@ -3,6 +3,7 @@ services:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
     environment:
+      TZ: Asia/Jakarta
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_4LW_COMMANDS_WHITELIST: ruok,srvr,stat,mntr
@@ -32,6 +33,7 @@ services:
     ports:
       - "9092:9092"
     environment:
+      TZ: Asia/Jakarta
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
@@ -85,6 +87,7 @@ services:
       - "9870:9870"
     environment:
       - CLUSTER_NAME=lambda-cluster
+      - TZ=Asia/Jakarta
     env_file:
       - ./env/hadoop.env
     networks:
@@ -105,6 +108,8 @@ services:
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
     container_name: datanode
+    environment:
+      - TZ=Asia/Jakarta
     restart: always
     depends_on:
       namenode:
@@ -147,6 +152,9 @@ services:
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
       - SPARK_DAEMON_MEMORY=1G
+      - SPARK_DRIVER_EXTRA_JAVA_OPTIONS=-Duser.timezone=Asia/Jakarta
+      - SPARK_EXECUTOR_EXTRA_JAVA_OPTIONS=-Duser.timezone=Asia/Jakarta
+      - TZ= Asia/Jakarta
     networks:
       - lambda_net
     deploy:
@@ -186,6 +194,9 @@ services:
       - SPARK_SSL_ENABLED=no
       - SPARK_DAEMON_MEMORY=1G
       - SPARK_WORKER_MEMORY=1G
+      - SPARK_DRIVER_EXTRA_JAVA_OPTIONS=-Duser.timezone=Asia/Jakarta
+      - SPARK_EXECUTOR_EXTRA_JAVA_OPTIONS=-Duser.timezone=Asia/Jakarta
+      - TZ= Asia/Jakarta
     networks:
       - lambda_net
     deploy:
@@ -210,6 +221,7 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms1g -Xmx2g
+      - TZ= Asia/Jakarta
     ports:
       - "9200:9200"
     networks:
@@ -238,6 +250,7 @@ services:
       - "5601:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - TZ=Asia/Jakarta
     networks:
       - lambda_net
     deploy:

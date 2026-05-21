@@ -36,6 +36,8 @@ from kafka.errors import NoBrokersAvailable  # type: ignore[import]
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
+logging.Formatter.converter = time.gmtime 
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [PRODUCER] %(message)s",

@@ -293,7 +293,7 @@ def run_fault_tolerance_audit(
             body: Dict[str, Any] = {
                 "query": query_body,
                 "size": 1000,
-                "sort": [{"time_cycles": "asc"}, {"_id": "asc"}],
+                "sort": [{"time_cycles": "asc"}, {"unit_id": "asc"}],
             }
             if last_sort is not None:
                 body["search_after"] = last_sort
