@@ -106,10 +106,13 @@ Start the speed layer using the fine-tuned model and point it to the `v2` index:
 ```bash
 docker exec -it spark-master spark-submit \
   --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.elasticsearch:elasticsearch-spark-30_2.12:8.11.1 \
+  --conf spark.excludeOnFailure.enabled=false \
+  --conf "spark.driver.extraJavaOptions=-Duser.timezone=Asia/Jakarta" \
+  --conf "spark.executor.extraJavaOptions=-Duser.timezone=Asia/Jakarta" \
   /app/src/streaming/speed_layer.py \
-  --model-dir /app/models/v2_drift_corrected/<TIMESTAMP_FOLDER> \
+  --model-dir /app/models/v2_drift_corrected/20260521_230324 \
   --es-index cmapss_predictions_v2 \
-  --checkpoint-dir /tmp/spark_checkpoints/speed_layer
+  --checkpoint-dir hdfs://namenode:9000/cmapss/checkpoints/speed_layer
 ```
 
 ### 2. Stream Clean Test Data and Swap Alias
@@ -128,5 +131,5 @@ PYTHONPATH=. python -m src.ingestion.kafka_producer --data-file data/CMAPSSData/
 
 Once the clean data ingestion completes, run the evaluation script to generate the performance report, fetching the newly indexed production latencies directly from Elasticsearch:
 ```bash
-PYTHONPATH=. python evaluate.py
+PYTHONPATH=. python -m src.evaluation.audit_report_generator --total-records 5000 --timeout 240 --v1-version 20260517_145257 --v2-version v2_drift_corrected/20260521_230324
 ```

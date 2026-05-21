@@ -143,7 +143,7 @@ def run_fault_tolerance_audit(
     worker_name: str,
     timeout: int,
     kafka_topic: str = KAFKA_TOPIC,
-) -> None:
+) -> dict:
     """
     Runs the full fault tolerance validation cycle:
     1. Pre-checks (Kafka, Elasticsearch)
@@ -378,6 +378,12 @@ def run_fault_tolerance_audit(
         f.write(report_content)
 
     logger.info("Fault Tolerance Audit complete.")
+    return {
+        "test_passed": bool(test_passed),
+        "recovery_latency": float(recovery_latency),
+        "consistency_result": str(consistency_result),
+        "report_path": report_path
+    }
 
 
 def main() -> None:

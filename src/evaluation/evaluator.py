@@ -12,6 +12,7 @@ from src.core.config import set_seed, DATA_DIR, MODELS_DIR, RESULTS_DIR
 from src.data.preprocess import CMAPSSPreprocessor
 from src.data.loaders import CMAPSSTestDataset
 from src.training.utils import nasa_asymmetric_score
+import argparse
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -62,7 +63,18 @@ def get_model(model_timestamp: str = None, models_dir: str = MODELS_DIR) -> Tupl
             return candidate, os.path.join(models_dir, version_dir)
     return None, None
 
-def run_evaluation_pipeline(model_timestamp: str = None, fetch_prod_latency: bool = True) -> None:
+def list_model_versions(models_dir: str = MODELS_DIR) -> list:
+    """
+    Returns a list of all model version directories (timestamps) sorted lexicographically (oldest to newest).
+    """
+    if not os.path.exists(models_dir):
+        return []
+    return sorted([
+        d for d in os.listdir(models_dir)
+        if os.path.isdir(os.path.join(models_dir, d)) and os.path.exists(os.path.join(models_dir, d, "model.onnx"))
+    ])
+
+def run_evaluation_pipeline(model_timestamp: str = None, fetch_prod_latency: bool = True, es_index: str = "cmapss_predictions_v2") -> dict:
     # 1. Setup paths
     CMAPSS_DATA_DIR = os.path.join(DATA_DIR, "CMAPSSData")
     test_path = os.path.join(CMAPSS_DATA_DIR, "test_FD001.txt")
@@ -109,7 +121,7 @@ def run_evaluation_pipeline(model_timestamp: str = None, fetch_prod_latency: boo
     
     # Fetch Elasticsearch production latency (Option A fallback)
     if fetch_prod_latency:
-        production_latency = fetch_es_latency(model_version=timestamp)
+        production_latency = fetch_es_latency(index=es_index, model_version=timestamp)
         if production_latency is not None:
             prod_latency_str = f"{production_latency:.4f} ms"
         else:
@@ -167,6 +179,18 @@ BIAS & ERROR DISTRIBUTION
     
     print(report)
     logger.info(f"Results saved to {run_results_dir}")
+    return {
+        "rmse": float(rmse),
+        "nasa_score": float(nasa_score),
+        "avg_latency": float(avg_latency),
+        "throughput": float(throughput),
+        "model_size_kb": float(model_size_kb),
+        "production_latency": production_latency,
+        "error_mean": float(error_mean),
+        "error_std": float(error_std),
+        "report_path": report_path,
+        "plot_path": plot_path
+    }
 
 def fetch_es_latency(
     index: str = "cmapss_predictions_v2",
@@ -203,6 +227,27 @@ def fetch_es_latency(
     return None
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Evaluate C-MAPSS RUL prediction models.")
+    parser.add_argument(
+        "--model-version",
+        type=str,
+        default=None,
+        help="Specific model version timestamp (e.g., 20260517_145257) to evaluate. Defaults to latest.")
+    parser.add_argument(
+        "--no-prod-latency",
+        action="store_true",
+        help="Skip querying Elasticsearch for production latency and fallback to synthetic latency.")
+    parser.add_argument(
+        "--es-index",
+        type=str,
+        default="cmapss_predictions_v2",
+        help="Elasticsearch index to query for production latency.")
+    args = parser.parse_args()
     set_seed(42)
-    run_evaluation_pipeline()
+    run_evaluation_pipeline(
+        model_timestamp=args.model_version,
+        fetch_prod_latency=not args.no_prod_latency,
+        es_index=args.es_index
+    )
+
 

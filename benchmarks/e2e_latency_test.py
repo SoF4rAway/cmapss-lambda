@@ -74,7 +74,7 @@ def run_e2e_latency_benchmark(
     kafka_broker: str,
     es_host: str,
     kafka_topic: str = KAFKA_TOPIC,
-) -> None:
+) -> dict:
     """Executes the E2E latency test using a black-box polling strategy."""
     
     # 1. Initialize Clients
@@ -179,6 +179,11 @@ def run_e2e_latency_benchmark(
         f.write(report_content)
         
     logger.info(f"Benchmark report saved to '{report_path}'.")
+    return {
+        "e2e_latency": float(e2e_latency),
+        "attempts": int(attempts),
+        "report_path": report_path
+    }
 
 
 def main() -> None:

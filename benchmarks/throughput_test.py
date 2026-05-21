@@ -76,7 +76,7 @@ def run_throughput_benchmark(
     es_host: str,
     total_records: int,
     kafka_topic: str = KAFKA_TOPIC,
-) -> None:
+) -> dict:
     
     es_client = Elasticsearch(es_host)
     producer = KafkaProducer(
@@ -113,6 +113,7 @@ def run_throughput_benchmark(
     # 4. Await First Output (Start Timer)
     t_start = None
     logger.info("Polling Elasticsearch for the first processed document...")
+    poll_start_time = time.perf_counter()
     while True:
         es_client.indices.refresh(index=es_index)
         count = es_client.count(index=es_index)["count"]
@@ -120,6 +121,8 @@ def run_throughput_benchmark(
             t_start = time.perf_counter()
             logger.info(f"First document detected! Start processing timer. (Count: {count})")
             break
+        if time.perf_counter() - poll_start_time > 60.0:
+            raise TimeoutError("Timed out waiting for first document to be indexed in Elasticsearch.")
         time.sleep(0.5)
 
     # 5. Await Full Batch (End Timer)
@@ -137,6 +140,9 @@ def run_throughput_benchmark(
         if count >= total_records:
             t_end = time.perf_counter()
             break
+            
+        if time.perf_counter() - t_start > 300.0:
+            raise TimeoutError(f"Timed out waiting for all {total_records} records to be indexed in Elasticsearch. Only found {count}.")
             
         time.sleep(1.0)
 
@@ -164,6 +170,12 @@ def run_throughput_benchmark(
 - Timestamp (UTC): {time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
 """)
     logger.info(f"Throughput report saved to '{report_path}'.")
+    return {
+        "eps": float(eps),
+        "processing_time": float(processing_time),
+        "total_records": int(total_records),
+        "report_path": report_path
+    }
 
 
 def main() -> None:
