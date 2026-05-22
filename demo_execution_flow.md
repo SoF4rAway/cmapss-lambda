@@ -14,7 +14,7 @@ docker exec -it kafka kafka-topics --bootstrap-server kafka:29092 --delete --top
 docker exec -it kafka kafka-topics --bootstrap-server kafka:29092 --create --topic cmapss_telemetry --partitions 4 --replication-factor 1
 ```
 
-### 2. Reset HDFS Cold Storage
+### 2. Delete HDFS Directories
 Remove historical telemetry data stored on HDFS:
 ```bash
 docker exec -it namenode hdfs dfs -rm -r -f /cmapss
@@ -23,9 +23,9 @@ docker exec -it namenode hdfs dfs -rm -r -f /cmapss
 ### 3. Clear Spark Checkpoints
 Clean local and container checkpoints to prevent state serialization conflicts:
 ```bash
-rm -rf /tmp/spark_checkpoints/speed_layer/*
-docker exec spark-master rm -rf /tmp/spark_checkpoints/speed_layer
-docker exec spark-worker rm -rf /tmp/spark_checkpoints/speed_layer
+docker exec -it namenode hdfs dfs -rm -r -f /cmapss/checkpoints/speed_layer
+docker exec -it spark-master rm -rf /tmp/spark_checkpoints/speed_layer
+docker exec -it spark-worker rm -rf /tmp/spark_checkpoints/speed_layer
 ```
 
 ### 4. Reset Elasticsearch Indices & Alias
@@ -59,7 +59,7 @@ docker exec -it spark-master spark-submit \
   /app/src/streaming/speed_layer.py \
   --model-dir /app/models/20260517_145257 \
   --es-index cmapss_predictions_v1 \
-  --checkpoint-dir hdfs://namenode:9000/cmapss/checkpoints/speed_layer
+  --checkpoint-dir hdfs://namenode:9000/cmapss/checkpoints/speed_layer/v1
 ```
 
 ### 2. Ingest Drifted Data
@@ -80,15 +80,7 @@ Go back to the first terminal and stop the streaming job using `Ctrl+C`.
 
 ## Phase 3: Batch Retraining & Model Upgrade
 
-### 1. Clear Checkpoints for Pass 2
-To prevent schema or state recovery issues, clear the checkpoint directory before starting the updated job:
-```bash
-rm -rf /tmp/spark_checkpoints/speed_layer/*
-docker exec spark-master rm -rf /tmp/spark_checkpoints/speed_layer
-docker exec spark-worker rm -rf /tmp/spark_checkpoints/speed_layer
-```
-
-### 2. Run Batch Retraining
+### 1. Run Batch Retraining
 Fine-tune the model on the drifted data retrieved from the HDFS cold path:
 ```bash
 conda run -n pytorch-gpu env PYTHONPATH=. python -m src.batch.batch_retrain
@@ -99,7 +91,15 @@ conda run -n pytorch-gpu env PYTHONPATH=. python -m src.batch.batch_retrain
 
 ## Phase 4: Running Pass 2 (Corrected Model & Alias Swap)
 
-### 1. Start Streaming Job 2 (v2 Model)
+### 1. Clear Checkpoints for Pass 2
+To prevent schema or state recovery issues, clear the checkpoint directory before starting the updated job:
+```bash
+rm -rf /tmp/spark_checkpoints/speed_layer/*
+docker exec spark-master rm -rf /tmp/spark_checkpoints/speed_layer
+docker exec spark-worker rm -rf /tmp/spark_checkpoints/speed_layer
+```
+
+### 2. Start Streaming Job 2 (v2 Model)
 Start the speed layer using the fine-tuned model and point it to the `v2` index:
 > [!NOTE]
 > Run this in the first terminal. Keep it open.
@@ -112,10 +112,10 @@ docker exec -it spark-master spark-submit \
   /app/src/streaming/speed_layer.py \
   --model-dir /app/models/v2_drift_corrected/20260521_230324 \
   --es-index cmapss_predictions_v2 \
-  --checkpoint-dir hdfs://namenode:9000/cmapss/checkpoints/speed_layer
+  --checkpoint-dir hdfs://namenode:9000/cmapss/checkpoints/speed_layer/v2
 ```
 
-### 2. Stream Clean Test Data and Swap Alias
+### 3. Stream Clean Test Data and Swap Alias
 In the second terminal, begin streaming the original clean test data, and immediately trigger the alias swap script to redirect dashboard traffic atomically from `v1` to `v2`:
 ```bash
 # Start ingestion
@@ -126,10 +126,3 @@ PYTHONPATH=. python -m src.ingestion.kafka_producer --data-file data/CMAPSSData/
 ```
 
 ---
-
-## Phase 5: Evaluation & Latency Reporting
-
-Once the clean data ingestion completes, run the evaluation script to generate the performance report, fetching the newly indexed production latencies directly from Elasticsearch:
-```bash
-PYTHONPATH=. python -m src.evaluation.audit_report_generator --total-records 5000 --timeout 240 --v1-version 20260517_145257 --v2-version v2_drift_corrected/20260521_230324
-```
