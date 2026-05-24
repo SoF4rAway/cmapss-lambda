@@ -30,8 +30,14 @@ The system's machine learning components and real-time streaming pipeline are va
 | **Inference Latency (Synthetic)** | < 0.1 ms | **0.0375 ms** | **0.0780 ms** | `+0.0405 ms` | PASS |
 | **Inference Latency (Production)** | < 0.1 ms | **0.0129 ms** | **0.0133 ms** | `+0.0004 ms` | PASS |
 | **Model Size** | < 500 KB | **22.14 KB** | **22.14 KB** | `+0.00 KB` | PASS |
-| **Speed Layer Throughput** | - | - | **103.78 EPS** | - | PASS |
-| **End-to-End Latency (5s Trigger)**| < 6.0 s | - | **4.4165 s** | - | PASS |
+| **Ingestion Throughput** | - | - | **99.67 EPS** (25,000 records / 250.82s) | - | PASS |
+| **End-to-End Latency (5s Trigger)**| < 6.0 s | - | **3.9201 s** | - | PASS |
+| **Fault Tolerance (SIGKILL Recovery)** | < 10.0 s | - | **4.10 s** (No data loss) | - | PASS |
+| **Error Statistics** | | | | | |
+| &nbsp;&nbsp;V1 Bias (Mean Error) | - | **-1.6201** | - | - | - |
+| &nbsp;&nbsp;V2 Bias (Mean Error) | - | - | **-5.0574** | - | - |
+| &nbsp;&nbsp;V1 Error Std | - | **15.4715** | - | - | - |
+| &nbsp;&nbsp;V2 Error Std | - | - | **15.3877** | - | - |
 
 > [!TIP]
 > **Operational Analysis:** Although the retrained model (V2) exhibits a slightly higher average error (RMSE), it has a significantly better NASA Asymmetric Score. This indicates that V2's errors are skewed conservative (underestimating remaining useful life), which dramatically reduces operational failure risk and safely passes the 5% circuit breaker safety check.
