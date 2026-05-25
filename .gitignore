@@ -22,6 +22,7 @@ wheels/
 MANIFEST
 .pytest_cache/
 .agents/
+.kilo/
 
 # --- Environments ---
 .env
